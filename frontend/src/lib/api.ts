@@ -17,10 +17,19 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
   return res.json()
 }
 
+// Helper to build query string, filtering out undefined values
+function buildQuery(params?: Record<string, string | number | undefined>): string {
+  if (!params) return ''
+  const filtered = Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== null)
+  ) as Record<string, string>
+  return Object.keys(filtered).length > 0 ? `?${new URLSearchParams(filtered)}` : ''
+}
+
 // Recipes
 export const recipes = {
   list: (params?: { approvalStatus?: string; mealType?: string }) => {
-    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
+    const query = buildQuery(params)
     return fetchApi<Recipe[]>(`/recipes${query}`)
   },
   discover: (limit = 10) => fetchApi<Recipe[]>(`/recipes/discover?limit=${limit}`),
@@ -43,7 +52,7 @@ export const recipes = {
 // Ingredients
 export const ingredients = {
   list: (params?: { search?: string; category?: string }) => {
-    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
+    const query = buildQuery(params)
     return fetchApi<Ingredient[]>(`/ingredients${query}`)
   },
   get: (id: string) => fetchApi<Ingredient>(`/ingredients/${id}`),
@@ -56,7 +65,7 @@ export const ingredients = {
 // Meal Plans
 export const mealPlans = {
   list: (params?: { fromDate?: string; toDate?: string }) => {
-    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
+    const query = buildQuery(params)
     return fetchApi<MealPlan[]>(`/meal-plans${query}`)
   },
   get: (id: string) => fetchApi<MealPlan>(`/meal-plans/${id}`),
@@ -96,7 +105,7 @@ export const shoppingLists = {
 // Pantry
 export const pantry = {
   list: (params?: { status?: string; expiringWithinDays?: number }) => {
-    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
+    const query = buildQuery(params)
     return fetchApi<PantryItem[]>(`/pantry${query}`)
   },
   expiring: (days = 5) => fetchApi<PantryItem[]>(`/pantry/expiring?days=${days}`),
@@ -302,7 +311,7 @@ export const preferences = {
 // Recommendations API
 export const recommendations = {
   list: (params?: { mealType?: string; limit?: number }) => {
-    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
+    const query = buildQuery(params)
     return fetchApi<ScoredRecipe[]>(`/recommendations${query}`)
   },
   suggest: (mealType = 'dinner') => fetchApi<{ recipe: Recipe | null; score?: number; reason?: string }>(`/recommendations/suggest?mealType=${mealType}`),

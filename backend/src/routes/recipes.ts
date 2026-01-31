@@ -5,8 +5,8 @@ interface RecipeQuery {
   approvalStatus?: ApprovalStatus
   mealType?: MealType
   cookingStyle?: CookingStyle
-  limit?: number
-  offset?: number
+  limit?: string
+  offset?: string
 }
 
 interface RecipeParams {
@@ -46,7 +46,9 @@ interface UpdateApprovalBody {
 export default async function recipeRoutes(fastify: FastifyInstance) {
   // List recipes with filtering
   fastify.get('/', async (request: FastifyRequest<{ Querystring: RecipeQuery }>) => {
-    const { approvalStatus, mealType, cookingStyle, limit = 50, offset = 0 } = request.query
+    const { approvalStatus, mealType, cookingStyle } = request.query
+    const limit = Number(request.query.limit) || 50
+    const offset = Number(request.query.offset) || 0
 
     const recipes = await fastify.prisma.recipe.findMany({
       where: {
@@ -68,8 +70,8 @@ export default async function recipeRoutes(fastify: FastifyInstance) {
   })
 
   // Get pending recipes for swipe discovery
-  fastify.get('/discover', async (request: FastifyRequest<{ Querystring: { limit?: number } }>) => {
-    const limit = request.query.limit || 10
+  fastify.get('/discover', async (request: FastifyRequest<{ Querystring: { limit?: string } }>) => {
+    const limit = Number(request.query.limit) || 10
 
     const recipes = await fastify.prisma.recipe.findMany({
       where: { approvalStatus: 'pending' },
