@@ -2,11 +2,12 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Calendar, ChefHat, ShoppingCart, Package, Compass, Upload, Settings } from 'lucide-react'
+import { Calendar, ChefHat, ShoppingCart, Package, Compass, Upload, Settings, BookOpen } from 'lucide-react'
 import clsx from 'clsx'
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: ChefHat },
+  { href: '/recipes', label: 'Recipes', icon: BookOpen },
   { href: '/discover', label: 'Discover', icon: Compass },
   { href: '/meal-plan', label: 'Meal Plan', icon: Calendar },
   { href: '/shopping', label: 'Shopping', icon: ShoppingCart },
