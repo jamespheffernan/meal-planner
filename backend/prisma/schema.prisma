@@ -1,0 +1,308 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Enums
+enum MealType {
+  breakfast
+  lunch
+  dinner
+  snack
+}
+
+enum CookingStyle {
+  quick_weeknight
+  batch_cook
+  special_occasion
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+  archived
+}
+
+enum IngredientCategory {
+  staple
+  perishable
+  pantry
+  produce
+  meat
+  dairy
+  frozen
+}
+
+enum BrandPreference {
+  preferred
+  acceptable
+  avoid
+}
+
+enum PantryStatus {
+  stocked
+  running_low
+  depleted
+}
+
+enum PantrySource {
+  grocery_trip
+  manual_entry
+  recipe_deduction
+  user_checkin
+}
+
+enum MealPlanStatus {
+  planned
+  cooked
+  skipped
+}
+
+enum ShoppingListStatus {
+  draft
+  ready
+  shopping
+  completed
+}
+
+enum UserOverride {
+  need
+  have
+}
+
+enum ReceiptStatus {
+  uploaded
+  parsed
+  matched
+  completed
+}
+
+enum CookingRating {
+  thumbs_up
+  thumbs_down
+  neutral
+}
+
+enum DayOfWeek {
+  monday
+  tuesday
+  wednesday
+  thursday
+  friday
+  saturday
+  sunday
+}
+
+// Core Tables
+
+model Recipe {
+  id                         String         @id @default(uuid())
+  name                       String
+  description                String?
+  source                     String?
+  servings                   Int
+  cookTimeMinutes            Int            @map("cook_time_minutes")
+  prepTimeMinutes            Int?           @map("prep_time_minutes")
+  totalTimeMinutes           Int?           @map("total_time_minutes")
+  mealType                   MealType       @map("meal_type")
+  cookingStyle               CookingStyle   @map("cooking_style")
+  photoUrl                   String?        @map("photo_url")
+  estimatedCaloriesPerServing Int?          @map("estimated_calories_per_serving")
+  estimatedCostPerServing    Decimal?       @map("estimated_cost_per_serving") @db.Decimal(10, 2)
+  caloriesIsEstimate         Boolean        @default(true) @map("calories_is_estimate")
+  costIsEstimate             Boolean        @default(true) @map("cost_is_estimate")
+  approvalStatus             ApprovalStatus @default(pending) @map("approval_status")
+  timesCooked                Int            @default(0) @map("times_cooked")
+  lastCookedDate             DateTime?      @map("last_cooked_date") @db.Date
+  createdAt                  DateTime       @default(now()) @map("created_at")
+  updatedAt                  DateTime       @updatedAt @map("updated_at")
+
+  recipeIngredients RecipeIngredient[]
+  recipeInstructions RecipeInstruction[]
+  cookingHistory    CookingHistory[]
+  mealPlans         MealPlan[]
+
+  @@map("recipes")
+}
+
+model Ingredient {
+  id                     String             @id @default(uuid())
+  name                   String             @unique
+  category               IngredientCategory
+  typicalUnit            String             @map("typical_unit")
+  estimatedCaloriesPerUnit Decimal?         @map("estimated_calories_per_unit") @db.Decimal(10, 2)
+  estimatedCostPerUnit   Decimal?           @map("estimated_cost_per_unit") @db.Decimal(10, 2)
+  createdAt              DateTime           @default(now()) @map("created_at")
+
+  brands            Brand[]
+  recipeIngredients RecipeIngredient[]
+  pantryInventory   PantryInventory[]
+  shoppingListItems ShoppingListItem[]
+
+  @@map("ingredients")
+}
+
+model Brand {
+  id              String          @id @default(uuid())
+  ingredientId    String          @map("ingredient_id")
+  brandName       String          @map("brand_name")
+  preferenceLevel BrandPreference @map("preference_level")
+  notes           String?
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  ingredient        Ingredient         @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  shoppingListItems ShoppingListItem[]
+
+  @@map("brands")
+}
+
+model RecipeIngredient {
+  id           String  @id @default(uuid())
+  recipeId     String  @map("recipe_id")
+  ingredientId String  @map("ingredient_id")
+  quantity     Decimal @db.Decimal(10, 2)
+  unit         String
+  notes        String?
+  optional     Boolean @default(false)
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  recipe     Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@map("recipe_ingredients")
+}
+
+model RecipeInstruction {
+  id              String   @id @default(uuid())
+  recipeId        String   @map("recipe_id")
+  stepNumber      Int      @map("step_number")
+  instructionText String   @map("instruction_text")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+
+  @@map("recipe_instructions")
+}
+
+model CookingHistory {
+  id                String        @id @default(uuid())
+  recipeId          String        @map("recipe_id")
+  cookedDate        DateTime      @map("cooked_date") @db.Date
+  servingsMade      Int           @map("servings_made")
+  isBatchCook       Boolean       @default(false) @map("is_batch_cook")
+  intendedMealCount Int           @default(1) @map("intended_meal_count")
+  rating            CookingRating?
+  wouldMakeAgain    Boolean?      @map("would_make_again")
+  notes             String?
+  actualCost        Decimal?      @map("actual_cost") @db.Decimal(10, 2)
+  actualTimeMinutes Int?          @map("actual_time_minutes")
+  createdAt         DateTime      @default(now()) @map("created_at")
+
+  recipe    Recipe     @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  mealPlans MealPlan[]
+
+  @@map("cooking_history")
+}
+
+model PantryInventory {
+  id             String       @id @default(uuid())
+  ingredientId   String       @map("ingredient_id")
+  quantity       Decimal      @db.Decimal(10, 2)
+  unit           String
+  acquiredDate   DateTime     @map("acquired_date") @db.Date
+  expirationDate DateTime?    @map("expiration_date") @db.Date
+  status         PantryStatus @default(stocked)
+  source         PantrySource
+  lastUpdated    DateTime     @default(now()) @updatedAt @map("last_updated")
+  notes          String?
+
+  ingredient Ingredient @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@map("pantry_inventory")
+}
+
+model MealPlan {
+  id                    String         @id @default(uuid())
+  recipeId              String         @map("recipe_id")
+  plannedDate           DateTime       @map("planned_date") @db.Date
+  mealType              MealType       @map("meal_type")
+  servingsPlanned       Int            @map("servings_planned")
+  isLeftover            Boolean        @default(false) @map("is_leftover")
+  parentCookingEventId  String?        @map("parent_cooking_event_id")
+  status                MealPlanStatus @default(planned)
+  createdAt             DateTime       @default(now()) @map("created_at")
+
+  recipe             Recipe          @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  parentCookingEvent CookingHistory? @relation(fields: [parentCookingEventId], references: [id], onDelete: SetNull)
+
+  @@map("meal_plans")
+}
+
+model ShoppingList {
+  id                 String             @id @default(uuid())
+  createdDate        DateTime           @default(now()) @map("created_date") @db.Date
+  shoppingDate       DateTime?          @map("shopping_date") @db.Date
+  status             ShoppingListStatus @default(draft)
+  totalEstimatedCost Decimal?           @map("total_estimated_cost") @db.Decimal(10, 2)
+  notes              String?
+  createdAt          DateTime           @default(now()) @map("created_at")
+
+  items ShoppingListItem[]
+
+  @@map("shopping_lists")
+}
+
+model ShoppingListItem {
+  id             String       @id @default(uuid())
+  shoppingListId String       @map("shopping_list_id")
+  ingredientId   String       @map("ingredient_id")
+  brandId        String?      @map("brand_id")
+  quantity       Decimal      @db.Decimal(10, 2)
+  unit           String
+  assumedHave    Boolean      @default(false) @map("assumed_have")
+  userOverride   UserOverride? @map("user_override")
+  estimatedCost  Decimal?     @map("estimated_cost") @db.Decimal(10, 2)
+  actualCost     Decimal?     @map("actual_cost") @db.Decimal(10, 2)
+  purchased      Boolean      @default(false)
+  recipeIds      String[]     @map("recipe_ids")
+  notes          String?
+  createdAt      DateTime     @default(now()) @map("created_at")
+
+  shoppingList ShoppingList @relation(fields: [shoppingListId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  brand        Brand?       @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  @@map("shopping_list_items")
+}
+
+model GroceryReceipt {
+  id               String        @id @default(uuid())
+  storeName        String        @map("store_name")
+  purchaseDate     DateTime      @map("purchase_date") @db.Date
+  totalAmount      Decimal       @map("total_amount") @db.Decimal(10, 2)
+  receiptImageUrl  String?       @map("receipt_image_url")
+  parsedItems      Json?         @map("parsed_items")
+  processingStatus ReceiptStatus @default(uploaded) @map("processing_status")
+  createdAt        DateTime      @default(now()) @map("created_at")
+
+  @@map("grocery_receipts")
+}
+
+model UserPreferences {
+  id                  String    @id @default(uuid())
+  budgetTargetWeekly  Decimal?  @map("budget_target_weekly") @db.Decimal(10, 2)
+  calorieTargetDaily  Int?      @map("calorie_target_daily")
+  preferredCuisines   String[]  @map("preferred_cuisines")
+  dietaryRestrictions String[]  @map("dietary_restrictions")
+  dislikedIngredients String[]  @map("disliked_ingredients")
+  priorityWeights     Json?     @map("priority_weights")
+  defaultShoppingDay  DayOfWeek? @map("default_shopping_day")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@map("user_preferences")
+}
