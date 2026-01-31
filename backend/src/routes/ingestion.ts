@@ -27,6 +27,22 @@ interface ReceiptImportBody {
   storeName?: string
 }
 
+// Helper to extract URL from image field (can be string or ImageObject)
+function extractImageUrl(image: unknown): string | undefined {
+  if (!image) return undefined
+  if (typeof image === 'string') return image
+  if (typeof image === 'object' && image !== null) {
+    const imgObj = image as Record<string, unknown>
+    // Handle schema.org ImageObject
+    if (imgObj.url && typeof imgObj.url === 'string') return imgObj.url
+    // Handle array of images
+    if (Array.isArray(image) && image.length > 0) {
+      return extractImageUrl(image[0])
+    }
+  }
+  return undefined
+}
+
 export default async function ingestionRoutes(fastify: FastifyInstance) {
   // Import recipe from URL
   fastify.post('/url', async (request: FastifyRequest<{ Body: UrlImportBody }>, reply) => {
@@ -327,7 +343,7 @@ async function createRecipeFromScraped(
         (scraped.cookTimeMinutes || 30) + (scraped.prepTimeMinutes || 0),
       mealType: 'dinner', // Default
       cookingStyle: 'quick_weeknight', // Default
-      photoUrl: scraped.image,
+      photoUrl: extractImageUrl(scraped.image),
       approvalStatus: autoApprove ? 'approved' : 'pending',
       recipeIngredients: {
         create: ingredientRecords.map(ir => ({
