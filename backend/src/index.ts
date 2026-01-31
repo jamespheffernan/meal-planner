@@ -1,12 +1,16 @@
 import Fastify from 'fastify'
 import cors from '@fastify/cors'
 import sensible from '@fastify/sensible'
+import multipart from '@fastify/multipart'
 import prismaPlugin from './plugins/prisma.js'
 import recipeRoutes from './routes/recipes.js'
 import ingredientRoutes from './routes/ingredients.js'
 import mealPlanRoutes from './routes/meal-plans.js'
 import shoppingListRoutes from './routes/shopping-lists.js'
 import pantryRoutes from './routes/pantry.js'
+import ingestionRoutes from './routes/ingestion.js'
+import preferencesRoutes from './routes/preferences.js'
+import recommendationRoutes from './routes/recommendations.js'
 
 const fastify = Fastify({
   logger: true,
@@ -16,6 +20,7 @@ async function start() {
   // Register plugins
   await fastify.register(cors, { origin: true })
   await fastify.register(sensible)
+  await fastify.register(multipart, { limits: { fileSize: 10 * 1024 * 1024 } }) // 10MB limit
   await fastify.register(prismaPlugin)
 
   // Register routes
@@ -24,6 +29,9 @@ async function start() {
   await fastify.register(mealPlanRoutes, { prefix: '/api/meal-plans' })
   await fastify.register(shoppingListRoutes, { prefix: '/api/shopping-lists' })
   await fastify.register(pantryRoutes, { prefix: '/api/pantry' })
+  await fastify.register(ingestionRoutes, { prefix: '/api/import' })
+  await fastify.register(preferencesRoutes, { prefix: '/api/preferences' })
+  await fastify.register(recommendationRoutes, { prefix: '/api/recommendations' })
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok' }))

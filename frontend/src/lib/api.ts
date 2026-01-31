@@ -262,3 +262,84 @@ export interface CreatePantryItemInput {
   unit: string
   expirationDate?: string
 }
+
+// Import API
+export const recipeImport = {
+  fromUrl: (url: string, autoApprove = false) => fetchApi<{ success: boolean; recipe: Recipe; scraped: any }>('/import/url', {
+    method: 'POST',
+    body: JSON.stringify({ url, autoApprove }),
+  }),
+  fromImage: (imageBase64: string, mimeType: string, autoApprove = false) => fetchApi<{ success: boolean; recipe: Recipe }>('/import/image', {
+    method: 'POST',
+    body: JSON.stringify({ imageBase64, mimeType, autoApprove }),
+  }),
+  fromPaprika: (data: string, autoApprove = false) => fetchApi<{ success: boolean; imported: number; duplicatesSkipped: number }>('/import/paprika', {
+    method: 'POST',
+    body: JSON.stringify({ data, autoApprove }),
+  }),
+  parseReceipt: (imageBase64: string, mimeType: string, storeName?: string) => fetchApi<{ success: boolean; receipt: any; matchedItems: any[] }>('/import/receipt', {
+    method: 'POST',
+    body: JSON.stringify({ imageBase64, mimeType, storeName }),
+  }),
+}
+
+// Preferences API
+export const preferences = {
+  get: () => fetchApi<UserPreferences>('/preferences'),
+  update: (data: Partial<UserPreferences>) => fetchApi<UserPreferences>('/preferences', {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  addDislike: (ingredientId: string) => fetchApi<UserPreferences>(`/preferences/dislike/${ingredientId}`, {
+    method: 'POST',
+  }),
+  removeDislike: (ingredientId: string) => fetchApi<UserPreferences>(`/preferences/dislike/${ingredientId}`, {
+    method: 'DELETE',
+  }),
+  getDislikedIngredients: () => fetchApi<Ingredient[]>('/preferences/disliked-ingredients'),
+}
+
+// Recommendations API
+export const recommendations = {
+  list: (params?: { mealType?: string; limit?: number }) => {
+    const query = params ? `?${new URLSearchParams(params as Record<string, string>)}` : ''
+    return fetchApi<ScoredRecipe[]>(`/recommendations${query}`)
+  },
+  suggest: (mealType = 'dinner') => fetchApi<{ recipe: Recipe | null; score?: number; reason?: string }>(`/recommendations/suggest?mealType=${mealType}`),
+  useSoon: (limit = 5) => fetchApi<{ expiringItems: any[]; recommendations: any[] }>(`/recommendations/use-soon?limit=${limit}`),
+  mealPlanSuggestions: (date: string) => fetchApi<Record<string, any[]>>(`/recommendations/meal-plan-suggestions?date=${date}`),
+}
+
+// Additional types
+export interface UserPreferences {
+  id: string
+  budgetTargetWeekly?: number
+  calorieTargetDaily?: number
+  preferredCuisines: string[]
+  dietaryRestrictions: string[]
+  dislikedIngredients: string[]
+  priorityWeights?: {
+    variety?: number
+    expiration?: number
+    pantry?: number
+    budget?: number
+    calorie?: number
+    time?: number
+    rating?: number
+  }
+  defaultShoppingDay?: string
+}
+
+export interface ScoredRecipe {
+  recipe: Recipe
+  score: number
+  breakdown?: {
+    variety: number
+    expiration: number
+    pantry: number
+    budget: number
+    calorie: number
+    time: number
+    rating: number
+  }
+}

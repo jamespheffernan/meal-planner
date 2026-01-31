@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Calendar, ChefHat, ShoppingCart, Package, Compass } from 'lucide-react'
+import { Calendar, ChefHat, ShoppingCart, Package, Compass, Upload, Settings } from 'lucide-react'
 import clsx from 'clsx'
 
 const navItems = [
@@ -11,6 +11,11 @@ const navItems = [
   { href: '/meal-plan', label: 'Meal Plan', icon: Calendar },
   { href: '/shopping', label: 'Shopping', icon: ShoppingCart },
   { href: '/pantry', label: 'Pantry', icon: Package },
+]
+
+const secondaryItems = [
+  { href: '/import', label: 'Import', icon: Upload },
+  { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
 export function Navigation() {
@@ -24,25 +29,50 @@ export function Navigation() {
             Meal Planner
           </Link>
 
-          <div className="flex space-x-1">
-            {navItems.map(({ href, label, icon: Icon }) => {
-              const isActive = pathname === href
-              return (
-                <Link
-                  key={href}
-                  href={href}
-                  className={clsx(
-                    'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-                    isActive
-                      ? 'bg-gray-900 text-white'
-                      : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
-                  )}
-                >
-                  <Icon className="w-4 h-4" />
-                  <span className="hidden sm:inline">{label}</span>
-                </Link>
-              )
-            })}
+          <div className="flex items-center gap-4">
+            <div className="flex space-x-1">
+              {navItems.map(({ href, label, icon: Icon }) => {
+                const isActive = pathname === href
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={clsx(
+                      'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-gray-900 text-white'
+                        : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+                    )}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span className="hidden sm:inline">{label}</span>
+                  </Link>
+                )
+              })}
+            </div>
+
+            <div className="h-6 w-px bg-gray-200 hidden sm:block" />
+
+            <div className="flex space-x-1">
+              {secondaryItems.map(({ href, label, icon: Icon }) => {
+                const isActive = pathname === href
+                return (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={clsx(
+                      'flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                      isActive
+                        ? 'bg-gray-900 text-white'
+                        : 'text-gray-500 hover:bg-gray-100 hover:text-gray-900'
+                    )}
+                  >
+                    <Icon className="w-4 h-4" />
+                    <span className="hidden md:inline">{label}</span>
+                  </Link>
+                )
+              })}
+            </div>
           </div>
         </div>
       </div>
