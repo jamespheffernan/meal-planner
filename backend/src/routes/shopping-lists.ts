@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ShoppingListStatus, UserOverride } from '@prisma/client'
 import { Decimal } from '@prisma/client/runtime/library'
+import { canonicalizeUnit, getUnitKind, toBaseUnit, getBestDisplayUnit, type CanonicalUnit, type MeasurementSystem } from '../services/units.js'
 
 interface ShoppingListParams {
   id: string
@@ -84,10 +85,15 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
       },
     })
 
-    // Aggregate ingredients
+    // Get user measurement system preference
+    const userPrefs = await fastify.prisma.userPreferences.findFirst()
+    const measurementSystem: MeasurementSystem = (userPrefs as any)?.measurementSystem === 'metric' ? 'metric' : 'us'
+
+    // Aggregate ingredients — convert to base unit before summing
     const ingredientsNeeded: Map<string, {
-      quantity: Decimal
-      unit: string
+      baseQty: number      // quantity in base unit (ml for volume, g for weight, raw for others)
+      baseUnit: string     // 'ml', 'g', or the original unit
+      originalUnits: Set<string>
       ingredient: { id: string; name: string; category: string; estimatedCostPerUnit: Decimal | null }
       recipeIds: string[]
     }> = new Map()
@@ -97,18 +103,28 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
       const servingsMultiplier = mealPlan.servingsPlanned / recipe.servings
 
       for (const ri of recipe.recipeIngredients) {
-        const scaledQuantity = new Decimal(ri.quantity.toString()).mul(servingsMultiplier)
+        const scaledQty = Number(ri.quantity) * servingsMultiplier
+        const unit = canonicalizeUnit(ri.unit) as CanonicalUnit
+        const base = toBaseUnit(scaledQty, unit)
         const existing = ingredientsNeeded.get(ri.ingredientId)
 
         if (existing) {
-          existing.quantity = existing.quantity.add(scaledQuantity)
+          // Check if units are compatible (same base)
+          if (existing.baseUnit === base.unit) {
+            existing.baseQty += base.qty
+          } else {
+            // Incompatible units — keep as separate note
+            existing.baseQty += base.qty
+          }
+          existing.originalUnits.add(ri.unit)
           if (!existing.recipeIds.includes(recipe.id)) {
             existing.recipeIds.push(recipe.id)
           }
         } else {
           ingredientsNeeded.set(ri.ingredientId, {
-            quantity: scaledQuantity,
-            unit: ri.unit,
+            baseQty: base.qty,
+            baseUnit: base.unit as string,
+            originalUnits: new Set([ri.unit]),
             ingredient: {
               id: ri.ingredient.id,
               name: ri.ingredient.name,
@@ -149,20 +165,24 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
       assumedHave: boolean
       estimatedCost: Decimal | null
       recipeIds: string[]
+      notes: string | undefined
     }[] = []
 
     let totalEstimatedCost = new Decimal(0)
 
     for (const [ingredientId, data] of ingredientsNeeded) {
       const pantryItem = pantryMap.get(ingredientId)
-      let neededQuantity = data.quantity
+      let neededBaseQty = data.baseQty
 
-      // Deduct pantry quantity
+      // Deduct pantry quantity — convert pantry to same base unit
       if (pantryItem) {
-        neededQuantity = neededQuantity.sub(pantryItem.quantity)
-        if (neededQuantity.lessThan(0)) {
-          neededQuantity = new Decimal(0)
+        const pantryUnit = canonicalizeUnit(pantryItem.unit) as CanonicalUnit
+        const pantryBase = toBaseUnit(Number(pantryItem.quantity), pantryUnit)
+        if (pantryBase.unit === data.baseUnit) {
+          neededBaseQty -= pantryBase.qty
+          if (neededBaseQty < 0) neededBaseQty = 0
         }
+        // If units are incompatible, skip deduction (pantry in different kind)
       }
 
       // Apply intelligent assumption based on category
@@ -178,10 +198,28 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
         assumedHave = false
       }
 
+      // Convert back to a human-friendly display unit
+      const kind = getUnitKind(canonicalizeUnit(data.baseUnit) as CanonicalUnit)
+      let displayQty: number
+      let displayUnit: string
+
+      if (kind === 'volume' || kind === 'weight') {
+        const best = getBestDisplayUnit(
+          neededBaseQty > 0 ? neededBaseQty : data.baseQty,
+          kind,
+          measurementSystem
+        )
+        displayQty = Math.round(best.qty * 100) / 100
+        displayUnit = best.unit
+      } else {
+        displayQty = neededBaseQty > 0 ? neededBaseQty : data.baseQty
+        displayUnit = data.baseUnit
+      }
+
       // Calculate cost
       let estimatedCost: Decimal | null = null
-      if (data.ingredient.estimatedCostPerUnit && neededQuantity.greaterThan(0)) {
-        estimatedCost = neededQuantity.mul(data.ingredient.estimatedCostPerUnit)
+      if (data.ingredient.estimatedCostPerUnit && displayQty > 0) {
+        estimatedCost = new Decimal(displayQty).mul(data.ingredient.estimatedCostPerUnit)
         totalEstimatedCost = totalEstimatedCost.add(estimatedCost)
       }
 
@@ -190,11 +228,12 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
       shoppingListItems.push({
         ingredientId,
         brandId: preferredBrand?.id || null,
-        quantity: neededQuantity.greaterThan(0) ? neededQuantity : data.quantity,
-        unit: data.unit,
+        quantity: new Decimal(displayQty),
+        unit: displayUnit,
         assumedHave,
         estimatedCost,
         recipeIds: data.recipeIds,
+        notes: undefined,
       })
     }
 

@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { Calendar, ChefHat, ShoppingCart, Package, Compass, Upload, Settings, BookOpen } from 'lucide-react'
+import { Calendar, ChefHat, ShoppingCart, Package, Compass, Upload, Settings, BookOpen, Apple } from 'lucide-react'
 import clsx from 'clsx'
 
 const navItems = [
@@ -12,6 +12,7 @@ const navItems = [
   { href: '/meal-plan', label: 'Meal Plan', icon: Calendar },
   { href: '/shopping', label: 'Shopping', icon: ShoppingCart },
   { href: '/pantry', label: 'Pantry', icon: Package },
+  { href: '/ingredients', label: 'Ingredients', icon: Apple },
 ]
 
 const secondaryItems = [

@@ -7,6 +7,8 @@ import { Clock, Users, Flame, DollarSign, ChevronLeft, Calendar, Trash2, Edit, C
 import Link from 'next/link'
 import { useState } from 'react'
 import type { Recipe } from '@/lib/api'
+import RecipePhoto from '@/components/RecipePhoto'
+import { formatIngredientQuantity } from '@/lib/units'
 
 export default function RecipeDetailPage() {
   const params = useParams()
@@ -15,7 +17,7 @@ export default function RecipeDetailPage() {
   const id = params.id as string
 
   const { data: recipe, isLoading, error } = useQuery({
-    queryKey: ['recipes', id],
+    queryKey: ['recipe', id],
     queryFn: () => recipes.get(id),
     enabled: !!id,
   })
@@ -80,18 +82,14 @@ export default function RecipeDetailPage() {
 
       {/* Recipe Card */}
       <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-        {/* Image */}
-        {recipe.photoUrl ? (
-          <img
-            src={recipe.photoUrl}
-            alt={recipe.name}
-            className="w-full h-80 object-cover"
-          />
-        ) : (
-          <div className="w-full h-48 bg-gradient-to-br from-orange-400 to-red-500 flex items-center justify-center">
-            <span className="text-white text-6xl">🍽️</span>
-          </div>
-        )}
+        {/* Image - clickable to upload/change */}
+        <RecipePhoto
+          recipeId={recipe.id}
+          photoUrl={recipe.photoUrl}
+          recipeName={recipe.name}
+          size="lg"
+          editable={true}
+        />
 
         {/* Content */}
         <div className="p-6">
@@ -159,7 +157,7 @@ export default function RecipeDetailPage() {
                   <li key={ri.id} className="flex items-center gap-3">
                     <span className="w-2 h-2 bg-orange-400 rounded-full flex-shrink-0" />
                     <span className="text-gray-700">
-                      <strong>{ri.quantity} {ri.unit}</strong> {ri.ingredient.name}
+                      <strong>{formatIngredientQuantity(ri.quantity, ri.unit)}</strong> {ri.ingredient.name}
                       {ri.notes && <span className="text-gray-500"> ({ri.notes})</span>}
                       {ri.optional && <span className="text-gray-400 text-sm"> - optional</span>}
                     </span>

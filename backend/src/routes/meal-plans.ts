@@ -150,6 +150,49 @@ export default async function mealPlanRoutes(fastify: FastifyInstance) {
     return result
   })
 
+  // Bulk assign multiple recipes to meal plan
+  fastify.post('/bulk-assign', async (request: FastifyRequest<{
+    Body: {
+      assignments: Array<{
+        recipeId: string
+        mealType: MealType
+        servings: number
+        dates: string[]
+      }>
+    }
+  }>) => {
+    const { assignments } = request.body
+
+    const result = await fastify.prisma.$transaction(async (tx) => {
+      const createdMealPlans = []
+
+      for (const assignment of assignments) {
+        const { recipeId, mealType, servings, dates } = assignment
+
+        // Create meal plans for each date
+        for (let i = 0; i < dates.length; i++) {
+          const mealPlan = await tx.mealPlan.create({
+            data: {
+              recipeId,
+              plannedDate: new Date(dates[i]),
+              mealType,
+              servingsPlanned: servings,
+              isLeftover: i > 0, // First occurrence is fresh, rest are leftovers
+            },
+            include: {
+              recipe: true,
+            },
+          })
+          createdMealPlans.push(mealPlan)
+        }
+      }
+
+      return { success: true, count: createdMealPlans.length, mealPlans: createdMealPlans }
+    })
+
+    return result
+  })
+
   // Update meal plan
   fastify.put('/:id', async (
     request: FastifyRequest<{ Params: MealPlanParams; Body: Partial<CreateMealPlanBody> & { status?: MealPlanStatus } }>,

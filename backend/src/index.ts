@@ -11,9 +11,11 @@ import pantryRoutes from './routes/pantry.js'
 import ingestionRoutes from './routes/ingestion.js'
 import preferencesRoutes from './routes/preferences.js'
 import recommendationRoutes from './routes/recommendations.js'
+import settingsRoutes from './routes/settings.js'
 
 const fastify = Fastify({
   logger: true,
+  bodyLimit: 50 * 1024 * 1024, // 50MB limit for base64 images
 })
 
 async function start() {
@@ -32,6 +34,7 @@ async function start() {
   await fastify.register(ingestionRoutes, { prefix: '/api/import' })
   await fastify.register(preferencesRoutes, { prefix: '/api/preferences' })
   await fastify.register(recommendationRoutes, { prefix: '/api/recommendations' })
+  await fastify.register(settingsRoutes, { prefix: '/api/settings' })
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok' }))

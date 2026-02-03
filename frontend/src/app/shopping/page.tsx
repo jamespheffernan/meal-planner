@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { ShoppingCart, Check, RefreshCw, Package } from 'lucide-react'
 import clsx from 'clsx'
 import type { ShoppingList, ShoppingListItem } from '@/lib/api'
+import { formatIngredientQuantity } from '@/lib/units'
 
 export default function ShoppingPage() {
   const queryClient = useQueryClient()
@@ -204,7 +205,7 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
                         {item.ingredient.name}
                       </p>
                       <p className="text-sm text-gray-500">
-                        {item.quantity} {item.unit}
+                        {formatIngredientQuantity(Number(item.quantity), item.unit)}
                         {item.estimatedCost && ` · £${Number(item.estimatedCost).toFixed(2)}`}
                       </p>
                     </div>

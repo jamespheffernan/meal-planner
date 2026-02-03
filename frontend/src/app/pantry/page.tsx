@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { Plus, Package, AlertTriangle, Check, X } from 'lucide-react'
 import clsx from 'clsx'
 import type { PantryItem, Ingredient } from '@/lib/api'
+import { formatIngredientQuantity } from '@/lib/units'
 
 export default function PantryPage() {
   const queryClient = useQueryClient()
@@ -151,7 +152,7 @@ function PantryItemRow({ item, onUpdateStatus }: {
           )}
         </div>
         <p className="text-sm text-gray-500">
-          {item.quantity} {item.unit}
+          {formatIngredientQuantity(Number(item.quantity), item.unit)}
           {item.expirationDate && ` · Expires ${format(new Date(item.expirationDate), 'MMM d')}`}
         </p>
       </div>

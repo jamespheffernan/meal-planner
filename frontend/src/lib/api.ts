@@ -1,12 +1,16 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'
 
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = { ...options?.headers as Record<string, string> }
+
+  // Only set Content-Type for requests with a body
+  if (options?.body) {
+    headers['Content-Type'] = 'application/json'
+  }
+
   const res = await fetch(`${API_URL}${endpoint}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
+    headers,
   })
 
   if (!res.ok) {
@@ -47,6 +51,18 @@ export const recipes = {
     body: JSON.stringify(data),
   }),
   delete: (id: string) => fetchApi<{ success: boolean }>(`/recipes/${id}`, { method: 'DELETE' }),
+  // Photo management
+  updatePhoto: (id: string, data: { photoUrl?: string; photoBase64?: string; mimeType?: string }) =>
+    fetchApi<Recipe>(`/recipes/${id}/photo`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  findImage: (id: string) => fetchApi<{ photoUrl: string }>(`/recipes/${id}/find-image`, {
+    method: 'POST',
+  }),
+  generateImage: (id: string) => fetchApi<{ photoUrl: string }>(`/recipes/${id}/generate-image`, {
+    method: 'POST',
+  }),
 }
 
 // Ingredients
@@ -59,6 +75,24 @@ export const ingredients = {
   create: (data: CreateIngredientInput) => fetchApi<Ingredient>('/ingredients', {
     method: 'POST',
     body: JSON.stringify(data),
+  }),
+  update: (id: string, data: Partial<CreateIngredientInput>) => fetchApi<Ingredient>(`/ingredients/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  }),
+  delete: (id: string) => fetchApi<{ success: boolean }>(`/ingredients/${id}`, { method: 'DELETE' }),
+  addBrand: (ingredientId: string, data: CreateBrandInput) => fetchApi<Brand>(`/ingredients/${ingredientId}/brands`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  deleteBrand: (ingredientId: string, brandId: string) =>
+    fetchApi<{ success: boolean }>(`/ingredients/${ingredientId}/brands/${brandId}`, { method: 'DELETE' }),
+  bulkCreate: (data: BulkCreateIngredientsInput) => fetchApi<{ success: boolean; created: number; errors?: { name: string; error: string }[] }>('/ingredients/bulk', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  refreshOff: (id: string) => fetchApi<{ ingredient: Ingredient; offData: OffLookupResult }>(`/ingredients/${id}/off-refresh`, {
+    method: 'POST',
   }),
 }
 
@@ -75,6 +109,14 @@ export const mealPlans = {
   }),
   createBatch: (data: CreateBatchMealPlanInput) => fetchApi<{ main: MealPlan; leftovers: MealPlan[] }>('/meal-plans/batch', {
     method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  bulkAssign: (data: BulkAssignMealPlanInput) => fetchApi<{ success: boolean; count: number; mealPlans: MealPlan[] }>('/meal-plans/bulk-assign', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  update: (id: string, data: Partial<CreateMealPlanInput>) => fetchApi<MealPlan>(`/meal-plans/${id}`, {
+    method: 'PUT',
     body: JSON.stringify(data),
   }),
   markCooked: (id: string, data: MarkCookedInput) => fetchApi<{ mealPlan: MealPlan }>(`/meal-plans/${id}/cooked`, {
@@ -163,6 +205,23 @@ export interface Ingredient {
   typicalUnit: string
   estimatedCaloriesPerUnit?: number
   estimatedCostPerUnit?: number
+  imageUrl?: string
+  brands?: Brand[]
+  recipeIngredients?: IngredientRecipeLink[]
+}
+
+export interface Brand {
+  id: string
+  brandName: string
+  preferenceLevel: 'preferred' | 'acceptable' | 'avoid'
+  notes?: string
+}
+
+export interface IngredientRecipeLink {
+  id: string
+  quantity: number
+  unit: string
+  recipe?: { id: string; name: string }
 }
 
 export interface MealPlan {
@@ -234,6 +293,27 @@ export interface CreateIngredientInput {
   name: string
   category: string
   typicalUnit: string
+  estimatedCaloriesPerUnit?: number
+  estimatedCostPerUnit?: number
+}
+
+export interface CreateBrandInput {
+  brandName: string
+  preferenceLevel: 'preferred' | 'acceptable' | 'avoid'
+  notes?: string
+}
+
+export interface BulkCreateIngredientsInput {
+  ingredients: CreateIngredientInput[]
+}
+
+export interface OffLookupResult {
+  productName?: string
+  calories?: number
+  protein?: number
+  carbs?: number
+  fat?: number
+  imageUrl?: string
 }
 
 export interface CreateMealPlanInput {
@@ -249,6 +329,15 @@ export interface CreateBatchMealPlanInput {
   mealType: string
   servingsPlanned: number
   leftoverDates: string[]
+}
+
+export interface BulkAssignMealPlanInput {
+  assignments: Array<{
+    recipeId: string
+    mealType: string
+    servings: number
+    dates: string[]
+  }>
 }
 
 export interface MarkCookedInput {
@@ -272,13 +361,35 @@ export interface CreatePantryItemInput {
   expirationDate?: string
 }
 
+// Parsed recipe from OCR (before saving)
+export interface ParsedRecipe {
+  name: string
+  description?: string
+  servings?: number
+  cookTimeMinutes?: number
+  prepTimeMinutes?: number
+  ingredients: { name: string; quantity?: number; unit?: string; notes?: string }[]
+  instructions: string[]
+}
+
 // Import API
 export const recipeImport = {
   fromUrl: (url: string, autoApprove = false) => fetchApi<{ success: boolean; recipe: Recipe; scraped: any }>('/import/url', {
     method: 'POST',
     body: JSON.stringify({ url, autoApprove }),
   }),
-  fromImage: (imageBase64: string, mimeType: string, autoApprove = false) => fetchApi<{ success: boolean; recipe: Recipe }>('/import/image', {
+  // Preview image OCR without saving
+  previewImage: (imageBase64: string, mimeType: string) => fetchApi<{ success: boolean; preview: true; count: number; recipes: ParsedRecipe[] }>('/import/image', {
+    method: 'POST',
+    body: JSON.stringify({ imageBase64, mimeType, previewOnly: true }),
+  }),
+  // Save corrected recipes from preview
+  saveRecipes: (recipes: ParsedRecipe[], autoApprove = false) => fetchApi<{ success: boolean; count: number; recipes: Recipe[] }>('/import/image', {
+    method: 'POST',
+    body: JSON.stringify({ recipes, autoApprove }),
+  }),
+  // Direct import (skip preview)
+  fromImage: (imageBase64: string, mimeType: string, autoApprove = false) => fetchApi<{ success: boolean; count: number; recipes: Recipe[] }>('/import/image', {
     method: 'POST',
     body: JSON.stringify({ imageBase64, mimeType, autoApprove }),
   }),
@@ -286,10 +397,16 @@ export const recipeImport = {
     method: 'POST',
     body: JSON.stringify({ data, autoApprove }),
   }),
-  parseReceipt: (imageBase64: string, mimeType: string, storeName?: string) => fetchApi<{ success: boolean; receipt: any; matchedItems: any[] }>('/import/receipt', {
+  parseReceipt: (imageBase64: string, mimeType: string, storeName?: string, applyMatches = true) =>
+    fetchApi<ReceiptImportResult>('/import/receipt', {
     method: 'POST',
-    body: JSON.stringify({ imageBase64, mimeType, storeName }),
+      body: JSON.stringify({ imageBase64, mimeType, storeName, applyMatches }),
   }),
+  applyReceiptMatches: (matches: Array<{ ingredientId: string; price?: number; quantity?: number }>) =>
+    fetchApi<{ success: boolean; updated: number; updates: Array<{ ingredientId: string; updatedCostPerUnit: number }> }>('/import/receipt/apply', {
+      method: 'POST',
+      body: JSON.stringify({ matches }),
+    }),
 }
 
 // Preferences API
@@ -306,6 +423,13 @@ export const preferences = {
     method: 'DELETE',
   }),
   getDislikedIngredients: () => fetchApi<Ingredient[]>('/preferences/disliked-ingredients'),
+  addLike: (ingredientId: string) => fetchApi<UserPreferences>(`/preferences/like/${ingredientId}`, {
+    method: 'POST',
+  }),
+  removeLike: (ingredientId: string) => fetchApi<UserPreferences>(`/preferences/like/${ingredientId}`, {
+    method: 'DELETE',
+  }),
+  getLikedIngredients: () => fetchApi<Ingredient[]>('/preferences/liked-ingredients'),
 }
 
 // Recommendations API
@@ -319,6 +443,22 @@ export const recommendations = {
   mealPlanSuggestions: (date: string) => fetchApi<Record<string, any[]>>(`/recommendations/meal-plan-suggestions?date=${date}`),
 }
 
+// Settings
+export const settings = {
+  getOpenAIKeyStatus: () => fetchApi<{ hasKey: boolean; source: 'env' | 'db' | 'none'; encryptionReady: boolean }>('/settings/openai-key'),
+  setOpenAIKey: (apiKey: string) => fetchApi<{ hasKey: boolean }>('/settings/openai-key', {
+    method: 'PUT',
+    body: JSON.stringify({ apiKey }),
+  }),
+  clearOpenAIKey: () => fetchApi<{ hasKey: boolean }>('/settings/openai-key', {
+    method: 'DELETE',
+  }),
+  verifyOpenAIKey: (apiKey?: string) => fetchApi<{ ok: boolean; model: string | null }>('/settings/openai-key/verify', {
+    method: 'POST',
+    body: JSON.stringify({ apiKey }),
+  }),
+}
+
 // Additional types
 export interface UserPreferences {
   id: string
@@ -327,6 +467,7 @@ export interface UserPreferences {
   preferredCuisines: string[]
   dietaryRestrictions: string[]
   dislikedIngredients: string[]
+  likedIngredients: string[]
   priorityWeights?: {
     variety?: number
     expiration?: number
@@ -337,6 +478,7 @@ export interface UserPreferences {
     rating?: number
   }
   defaultShoppingDay?: string
+  measurementSystem?: 'us' | 'metric'
 }
 
 export interface ScoredRecipe {
@@ -351,4 +493,44 @@ export interface ScoredRecipe {
     time: number
     rating: number
   }
+}
+
+export interface ReceiptImportResult {
+  success: boolean
+  receipt: {
+    id: string
+    storeName: string
+    purchaseDate: string
+    totalAmount: number
+    processingStatus: string
+  }
+  parsed: {
+    storeName?: string
+    purchaseDate?: string
+    items: Array<{
+      name: string
+      quantity?: number
+      unit?: string
+      price?: number
+    }>
+    total?: number
+  }
+  matchedItems: Array<{
+    receiptItem: string
+    matchedIngredient: string
+    ingredientId: string
+    matchScore?: number
+    updatedCostPerUnit?: number | null
+    suggestedCostPerUnit?: number | null
+    receiptPrice?: number
+    receiptQuantity?: number
+    applied?: boolean
+  }>
+  unmatchedCount: number
+  unmatchedItems: Array<{
+    name: string
+    quantity?: number
+    unit?: string
+    price?: number
+  }>
 }

@@ -1,4 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
+// @ts-ignore - no type definitions available
+import heicConvert from 'heic-convert'
+import sharp from 'sharp'
 import type { ApprovalStatus, MealType, CookingStyle } from '@prisma/client'
 
 interface RecipeQuery {
@@ -228,4 +231,134 @@ export default async function recipeRoutes(fastify: FastifyInstance) {
       return reply.notFound('Recipe not found')
     }
   })
+
+  // Update recipe photo
+  fastify.patch('/:id/photo', async (
+    request: FastifyRequest<{ Params: RecipeParams; Body: { photoUrl?: string; photoBase64?: string; mimeType?: string } }>,
+    reply
+  ) => {
+    const { id } = request.params
+    const { photoUrl, photoBase64, mimeType } = request.body
+
+    let finalPhotoUrl = photoUrl
+
+    // If base64 provided, normalize to a reasonably sized JPEG data URL
+    if (photoBase64 && mimeType) {
+      const normalized = await normalizePhotoBase64(photoBase64, mimeType)
+      finalPhotoUrl = `data:${normalized.mimeType};base64,${normalized.base64}`
+    }
+
+    if (!finalPhotoUrl) {
+      return reply.badRequest('Either photoUrl or photoBase64 with mimeType is required')
+    }
+
+    try {
+      const recipe = await fastify.prisma.recipe.update({
+        where: { id },
+        data: { photoUrl: finalPhotoUrl },
+      })
+      return recipe
+    } catch {
+      return reply.notFound('Recipe not found')
+    }
+  })
+
+  // Search and set a placeholder image for recipe
+  fastify.post('/:id/find-image', async (
+    request: FastifyRequest<{ Params: RecipeParams }>,
+    reply
+  ) => {
+    const { id } = request.params
+
+    const recipe = await fastify.prisma.recipe.findUnique({
+      where: { id },
+      select: { name: true, mealType: true },
+    })
+
+    if (!recipe) {
+      return reply.notFound('Recipe not found')
+    }
+
+    // Import dynamically to avoid circular deps
+    const { searchFoodImage, getPlaceholderImage } = await import('../services/image-search.js')
+
+    // Try to find a specific image, fall back to placeholder
+    let photoUrl = await searchFoodImage(recipe.name)
+    if (!photoUrl) {
+      photoUrl = getPlaceholderImage(recipe.mealType)
+    }
+
+    const updated = await fastify.prisma.recipe.update({
+      where: { id },
+      data: { photoUrl },
+    })
+
+    return { photoUrl: updated.photoUrl }
+  })
+
+  // Generate an AI image for a recipe
+  fastify.post('/:id/generate-image', async (
+    request: FastifyRequest<{ Params: RecipeParams }>,
+    reply
+  ) => {
+    const { id } = request.params
+
+    const recipe = await fastify.prisma.recipe.findUnique({
+      where: { id },
+      select: { name: true, mealType: true },
+    })
+
+    if (!recipe) {
+      return reply.notFound('Recipe not found')
+    }
+
+    try {
+      const { generateRecipeImage } = await import('../services/ai-image.js')
+      const photoUrl = await generateRecipeImage(fastify.prisma, recipe.name, recipe.mealType)
+
+      const updated = await fastify.prisma.recipe.update({
+        where: { id },
+        data: { photoUrl },
+      })
+
+      return { photoUrl: updated.photoUrl }
+    } catch (error) {
+      console.error('Failed to generate AI image', {
+        recipeId: id,
+        message: error instanceof Error ? error.message : error,
+      })
+      return reply.internalServerError('Failed to generate AI image')
+    }
+  })
+}
+
+async function normalizePhotoBase64(photoBase64: string, mimeType: string): Promise<{ base64: string; mimeType: string }> {
+  const lowerType = mimeType.toLowerCase()
+  let inputBuffer = Buffer.from(photoBase64, 'base64')
+
+  if (lowerType.includes('heic') || lowerType.includes('heif')) {
+    const jpegBuffer = await heicConvert({
+      buffer: inputBuffer,
+      format: 'JPEG',
+      quality: 0.9,
+    })
+    inputBuffer = Buffer.from(jpegBuffer)
+  }
+
+  const image = sharp(inputBuffer)
+  const metadata = await image.metadata()
+  const maxSize = 1600
+
+  if (metadata.width && metadata.height) {
+    if (metadata.width > maxSize || metadata.height > maxSize) {
+      image.resize({ width: maxSize, height: maxSize, fit: 'inside' })
+    }
+  }
+
+  const outputBuffer = await image.jpeg({ quality: 85 }).toBuffer()
+
+  return {
+    base64: outputBuffer.toString('base64'),
+    mimeType: 'image/jpeg',
+  }
 }

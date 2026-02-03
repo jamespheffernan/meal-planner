@@ -137,6 +137,7 @@ model Ingredient {
   typicalUnit            String             @map("typical_unit")
   estimatedCaloriesPerUnit Decimal?         @map("estimated_calories_per_unit") @db.Decimal(10, 2)
   estimatedCostPerUnit   Decimal?           @map("estimated_cost_per_unit") @db.Decimal(10, 2)
+  imageUrl               String?            @map("image_url")
   createdAt              DateTime           @default(now()) @map("created_at")
 
   brands            Brand[]
@@ -300,9 +301,20 @@ model UserPreferences {
   preferredCuisines   String[]  @map("preferred_cuisines")
   dietaryRestrictions String[]  @map("dietary_restrictions")
   dislikedIngredients String[]  @map("disliked_ingredients")
+  likedIngredients    String[]  @map("liked_ingredients")
   priorityWeights     Json?     @map("priority_weights")
   defaultShoppingDay  DayOfWeek? @map("default_shopping_day")
+  measurementSystem   String    @default("us") @map("measurement_system")
   updatedAt           DateTime  @updatedAt @map("updated_at")
 
   @@map("user_preferences")
+}
+
+model AppSecret {
+  id             String   @id
+  encryptedValue String   @map("encrypted_value")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@map("app_secrets")
 }

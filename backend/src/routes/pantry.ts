@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { PantryStatus, PantrySource } from '@prisma/client'
+import { canonicalizeUnit, toBaseUnit, type CanonicalUnit } from '../services/units.js'
 
 interface PantryParams {
   id: string
@@ -106,6 +107,7 @@ export default async function pantryRoutes(fastify: FastifyInstance) {
     const item = await fastify.prisma.pantryInventory.create({
       data: {
         ...rest,
+        unit: canonicalizeUnit(rest.unit),
         acquiredDate: acquiredDate ? new Date(acquiredDate) : new Date(),
         expirationDate: expirationDate ? new Date(expirationDate) : null,
         source: rest.source || 'manual_entry',
@@ -219,16 +221,32 @@ export default async function pantryRoutes(fastify: FastifyInstance) {
       const deducted = []
 
       for (const ri of recipe.recipeIngredients) {
-        const amountToDeduct = Number(ri.quantity) * multiplier
+        const recipeQty = Number(ri.quantity) * multiplier
+        const recipeUnit = canonicalizeUnit(ri.unit) as CanonicalUnit
+        const recipeBase = toBaseUnit(recipeQty, recipeUnit)
 
         const pantryItem = await tx.pantryInventory.findFirst({
           where: { ingredientId: ri.ingredientId },
         })
 
         if (pantryItem) {
-          const newQuantity = Math.max(0, Number(pantryItem.quantity) - amountToDeduct)
+          const pantryUnit = canonicalizeUnit(pantryItem.unit) as CanonicalUnit
+          const pantryBase = toBaseUnit(Number(pantryItem.quantity), pantryUnit)
+
+          let newQuantity: number
+          if (pantryBase.unit === recipeBase.unit) {
+            // Same base unit — subtract in base, convert back
+            const newBaseQty = Math.max(0, pantryBase.qty - recipeBase.qty)
+            // Convert back to pantry's original unit
+            const factor = pantryBase.qty > 0 ? Number(pantryItem.quantity) / pantryBase.qty : 1
+            newQuantity = newBaseQty * factor
+          } else {
+            // Incompatible units — best effort: subtract raw quantities
+            newQuantity = Math.max(0, Number(pantryItem.quantity) - recipeQty)
+          }
+
           const newStatus: PantryStatus = newQuantity <= 0 ? 'depleted' :
-            newQuantity < amountToDeduct ? 'running_low' : 'stocked'
+            newQuantity < Number(pantryItem.quantity) * 0.25 ? 'running_low' : 'stocked'
 
           const updated = await tx.pantryInventory.update({
             where: { id: pantryItem.id },

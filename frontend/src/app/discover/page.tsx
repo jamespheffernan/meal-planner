@@ -5,6 +5,7 @@ import { recipes } from '@/lib/api'
 import { useState } from 'react'
 import { ThumbsUp, ThumbsDown, Clock, Users, Flame, DollarSign } from 'lucide-react'
 import clsx from 'clsx'
+import RecipePhoto from '@/components/RecipePhoto'
 
 export default function DiscoverPage() {
   const queryClient = useQueryClient()
@@ -55,18 +56,14 @@ export default function DiscoverPage() {
       <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">Discover Recipes</h1>
 
       <div className="bg-white rounded-xl shadow-lg overflow-hidden">
-        {/* Recipe Image */}
-        {recipe.photoUrl ? (
-          <img
-            src={recipe.photoUrl}
-            alt={recipe.name}
-            className="w-full h-64 object-cover"
-          />
-        ) : (
-          <div className="w-full h-64 bg-gradient-to-br from-orange-400 to-red-500 flex items-center justify-center">
-            <span className="text-white text-6xl">🍽️</span>
-          </div>
-        )}
+        {/* Recipe Image - clickable to upload/find */}
+        <RecipePhoto
+          recipeId={recipe.id}
+          photoUrl={recipe.photoUrl}
+          recipeName={recipe.name}
+          size="lg"
+          editable={true}
+        />
 
         {/* Recipe Details */}
         <div className="p-6">

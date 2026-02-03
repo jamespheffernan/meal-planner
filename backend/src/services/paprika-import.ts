@@ -1,5 +1,7 @@
-import { createGunzip } from 'zlib'
+import { createGunzip, gunzipSync } from 'zlib'
 import { Readable } from 'stream'
+// @ts-ignore - no type definitions needed
+import AdmZip from 'adm-zip'
 
 interface PaprikaRecipe {
   name: string
@@ -35,22 +37,28 @@ interface ImportedRecipe {
 }
 
 /**
- * Parse a Paprika recipe export file (.paprikarecipes or JSON)
+ * Parse a Paprika recipe export file (.paprikarecipes)
  * Paprika exports can be:
- * 1. A gzipped JSON array (.paprikarecipes)
- * 2. A JSON array
- * 3. A single JSON object
+ * 1. A ZIP archive containing gzipped JSON files (most common .paprikarecipes format)
+ * 2. A gzipped JSON array
+ * 3. A JSON array
+ * 4. A single JSON object
  */
 export async function parsePaprikaExport(data: Buffer | string): Promise<ImportedRecipe[]> {
+  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf-8')
+
+  // Check if it's a ZIP file (PK magic bytes: 0x50 0x4B)
+  if (buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4B) {
+    return parseZipPaprikaExport(buffer)
+  }
+
   let jsonData: string
 
-  // Check if it's gzipped (Paprika .paprikarecipes format)
-  if (Buffer.isBuffer(data) && isGzipped(data)) {
-    jsonData = await decompressGzip(data)
-  } else if (Buffer.isBuffer(data)) {
-    jsonData = data.toString('utf-8')
+  // Check if it's gzipped
+  if (isGzipped(buffer)) {
+    jsonData = await decompressGzip(buffer)
   } else {
-    jsonData = data
+    jsonData = buffer.toString('utf-8')
   }
 
   // Parse JSON
@@ -63,6 +71,45 @@ export async function parsePaprikaExport(data: Buffer | string): Promise<Importe
   }
 
   return recipes.map(convertPaprikaRecipe)
+}
+
+/**
+ * Parse a Paprika ZIP archive export
+ * Each recipe is stored as a separate gzipped JSON file
+ */
+function parseZipPaprikaExport(buffer: Buffer): ImportedRecipe[] {
+  const zip = new AdmZip(buffer)
+  const entries = zip.getEntries()
+  const recipes: ImportedRecipe[] = []
+
+  for (const entry of entries) {
+    // Skip directories and non-recipe files
+    if (entry.isDirectory) continue
+
+    try {
+      const fileBuffer = entry.getData()
+
+      let jsonData: string
+      // Each file inside is gzipped
+      if (isGzipped(fileBuffer)) {
+        jsonData = gunzipSync(fileBuffer).toString('utf-8')
+      } else {
+        jsonData = fileBuffer.toString('utf-8')
+      }
+
+      const recipe = JSON.parse(jsonData) as PaprikaRecipe
+      recipes.push(convertPaprikaRecipe(recipe))
+    } catch (error) {
+      // Skip files that can't be parsed
+      console.warn(`Skipping entry ${entry.entryName}: ${error}`)
+    }
+  }
+
+  if (recipes.length === 0) {
+    throw new Error('No valid recipes found in Paprika export')
+  }
+
+  return recipes
 }
 
 /**
