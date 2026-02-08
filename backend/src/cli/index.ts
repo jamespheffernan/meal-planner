@@ -21,6 +21,7 @@ function printHelp() {
 
 Usage:
   npm run cli -- api [METHOD] <path> [options]
+  npm run cli -- admin <task> [options]
 
 Examples:
   npm run cli -- api GET /recipes
@@ -29,6 +30,9 @@ Examples:
   npm run cli -- api PATCH /recipes/123/approval --data '{"approvalStatus":"approved"}'
   npm run cli -- api POST /recipes/123/generate-image
   npm run cli -- api POST /import/url --data '{"url":"https://example.com/recipe"}'
+  npm run cli -- admin normalize-units --dry-run
+  npm run cli -- admin cleanup-garbage-ingredients --apply
+  npm run cli -- admin normalize-ingredients --apply
 
 Options:
   --base-url <url>        API base URL (default: ${DEFAULT_BASE_URL})
@@ -37,23 +41,32 @@ Options:
   --header <k:v>          Add header (can repeat)
   --pretty               Pretty-print JSON responses
   --raw                  Print raw response text
+  --apply                Run admin task in write mode
+  --dry-run              Run admin task in dry-run mode (default)
 `)
 }
 
 function parseArgs(argv: string[]): ParsedArgs | null {
   if (argv.length === 0) return null
   const command = argv.shift()
-  if (command !== 'api') return null
+  if (command !== 'api' && command !== 'admin') return null
+  const isAdmin = command === 'admin'
 
   let method = 'GET'
   let path = ''
 
-  if (argv[0] && METHODS.has(argv[0].toUpperCase())) {
-    method = argv.shift()!.toUpperCase()
-  }
-
-  if (argv[0] && !argv[0].startsWith('--')) {
-    path = argv.shift()!
+  if (command === 'api') {
+    if (argv[0] && METHODS.has(argv[0].toUpperCase())) {
+      method = argv.shift()!.toUpperCase()
+    }
+    if (argv[0] && !argv[0].startsWith('--')) {
+      path = argv.shift()!
+    }
+  } else {
+    const task = argv.shift()
+    if (!task) return null
+    method = 'POST'
+    path = `/admin/${task}`
   }
 
   const flags: ParsedArgs = {
@@ -97,6 +110,18 @@ function parseArgs(argv: string[]): ParsedArgs | null {
       flags.raw = true
       continue
     }
+    if (arg === '--apply') {
+      flags.data = JSON.stringify({ apply: true })
+      continue
+    }
+    if (arg === '--dry-run') {
+      flags.data = JSON.stringify({ apply: false })
+      continue
+    }
+  }
+
+  if (isAdmin && !flags.data) {
+    flags.data = JSON.stringify({ apply: false })
   }
 
   return flags

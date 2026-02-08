@@ -27,7 +27,7 @@ export async function searchFoodImage(dishName: string): Promise<string | null> 
       return null
     }
 
-    const data = await response.json()
+    const data: any = await response.json()
 
     if (data.results?.length > 0) {
       // Return the first image result

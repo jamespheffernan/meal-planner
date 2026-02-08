@@ -1,13 +1,25 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { shoppingLists, mealPlans } from '@/lib/api'
+import { shoppingLists, mealPlans, orders } from '@/lib/api'
 import { format, addDays, startOfWeek } from 'date-fns'
 import { useState } from 'react'
 import { ShoppingCart, Check, RefreshCw, Package } from 'lucide-react'
 import clsx from 'clsx'
-import type { ShoppingList, ShoppingListItem } from '@/lib/api'
+import type { ShoppingList, ShoppingListItem, PreparedOrder, AddToCartResult, OrderReviewResult } from '@/lib/api'
 import { formatIngredientQuantity } from '@/lib/units'
+
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (typeof e === 'string') return e
+  const maybe = e as { message?: unknown }
+  if (maybe && typeof maybe.message === 'string') return maybe.message
+  try {
+    return JSON.stringify(e)
+  } catch {
+    return 'Unknown error'
+  }
+}
 
 export default function ShoppingPage() {
   const queryClient = useQueryClient()
@@ -115,6 +127,18 @@ export default function ShoppingPage() {
 
 function ShoppingListView({ list }: { list: ShoppingList }) {
   const queryClient = useQueryClient()
+  const [orderModalOpen, setOrderModalOpen] = useState(false)
+  const [prepared, setPrepared] = useState<PreparedOrder | null>(null)
+  const [selections, setSelections] = useState<Record<string, string>>({})
+  const [quantities, setQuantities] = useState<Record<string, number>>({})
+  const [review, setReview] = useState<OrderReviewResult | null>(null)
+  const [orderResult, setOrderResult] = useState<AddToCartResult | null>(null)
+  const [orderAnalysis, setOrderAnalysis] = useState<any>(null)
+  const [orderError, setOrderError] = useState<string | null>(null)
+  const [slots, setSlots] = useState<Array<{ date: string; time: string; price: string; fullText: string }> | null>(null)
+  const [orderInfo, setOrderInfo] = useState<string | null>(null)
+  const [checkoutUrl, setCheckoutUrl] = useState<string | null>(null)
+  const [dryRunUrl, setDryRunUrl] = useState<string | null>(null)
 
   const updateItemMutation = useMutation({
     mutationFn: ({ itemId, data }: { itemId: string; data: { purchased?: boolean; userOverride?: 'need' | 'have' | null } }) =>
@@ -129,6 +153,124 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shoppingLists'] })
       queryClient.invalidateQueries({ queryKey: ['pantry'] })
+    },
+  })
+
+  const prepareOrderMutation = useMutation({
+    mutationFn: () => shoppingLists.prepareOrder(list.id, 'ocado', 5),
+    onSuccess: (data) => {
+      setPrepared(data)
+      // Initialize selections for auto-mapped items (none needed) and empty for needsChoice.
+      const initial: Record<string, string> = {}
+      data.needsChoice.forEach(nc => {
+        if (nc.candidates[0]) initial[nc.ingredientId] = nc.candidates[0].storeProductId
+      })
+      setSelections(initial)
+      // Seed quantity overrides for all needed items; piece-like units keep their rounded quantity,
+      // everything else defaults to 1 (since store pack sizes vary).
+      const q: Record<string, number> = {}
+      const neededIngredientIds = new Set<string>([
+        ...data.autoMapped.map(a => a.ingredientId),
+        ...data.needsChoice.map(nc => nc.ingredientId),
+      ])
+      list.items.forEach(i => {
+        if (!neededIngredientIds.has(i.ingredientId)) return
+        const u = String(i.unit || '').toLowerCase()
+        const base = Number(i.quantity) || 1
+        const qty = (u === 'piece' || u === 'pc' || u === 'pcs') ? Math.max(1, Math.round(base)) : 1
+        q[i.ingredientId] = qty
+      })
+      setQuantities(q)
+      setOrderResult(null)
+      setOrderAnalysis(null)
+      setReview(null)
+      setOrderError(null)
+      setOrderInfo(null)
+      setSlots(null)
+      setCheckoutUrl(null)
+      setDryRunUrl(null)
+      setOrderModalOpen(true)
+    },
+    onError: (err: unknown) => {
+      setOrderError(errorMessage(err) || 'Failed to prepare order')
+      setOrderModalOpen(true)
+    },
+  })
+
+  const confirmMappingsMutation = useMutation({
+    mutationFn: async () => {
+      if (!prepared) return { ok: true, mappings: [] }
+      const mappings = prepared.needsChoice.map(nc => ({
+        ingredientId: nc.ingredientId,
+        storeProductId: selections[nc.ingredientId],
+        isDefault: true,
+      })).filter(m => m.storeProductId)
+      if (mappings.length === 0) return { ok: true, mappings: [] }
+      return shoppingLists.confirmMappings(list.id, mappings)
+    },
+  })
+
+  const addToCartMutation = useMutation({
+    mutationFn: () => shoppingLists.addToCartWithQuantities(list.id, 'ocado', quantities),
+    onSuccess: async (data) => {
+      setOrderResult(data)
+      setOrderAnalysis(null)
+      setOrderError(null)
+      setOrderInfo('Added mapped items to cart.')
+      setReview(null)
+      queryClient.invalidateQueries({ queryKey: ['shoppingLists'] })
+      if (data.purchaseOrderId) {
+        try {
+          const analysis = await orders.analysis(data.purchaseOrderId)
+          setOrderAnalysis(analysis)
+        } catch {
+          // non-blocking
+        }
+      }
+    },
+    onError: (err: unknown) => {
+      setOrderResult(null)
+      setOrderAnalysis(null)
+      setOrderError(errorMessage(err) || 'Failed to add to cart')
+    },
+  })
+
+  const reviewMutation = useMutation({
+    mutationFn: () => shoppingLists.reviewOrder(list.id, 'ocado', quantities),
+    onSuccess: (data) => {
+      setReview(data)
+      setOrderError(null)
+      setOrderInfo('Review ready. Confirm to add to cart.')
+    },
+    onError: (err: unknown) => {
+      setReview(null)
+      setOrderError(errorMessage(err) || 'Failed to review order')
+    },
+  })
+
+  const checkoutDryRunMutation = useMutation({
+    mutationFn: () => shoppingLists.checkoutDryRun(list.id, 'ocado'),
+    onSuccess: (data) => {
+      setSlots(data.slots || [])
+      setCheckoutUrl(data.url || 'https://www.ocado.com')
+      setOrderInfo('Fetched delivery slots (dry-run).')
+    },
+    onError: (err: unknown) => {
+      setSlots(null)
+      setOrderError(errorMessage(err) || 'Failed to get delivery slots')
+    },
+  })
+
+  const placeOrderDryRunMutation = useMutation({
+    mutationFn: () => shoppingLists.placeOrderDryRun(list.id, 'ocado'),
+    onSuccess: (data) => {
+      setOrderError(null)
+      setOrderInfo(data.message || 'Checkout dry run completed.')
+      setDryRunUrl(data.url || null)
+      setSlots((prev) => prev ?? [])
+    },
+    onError: (err: unknown) => {
+      setOrderError(errorMessage(err) || 'Failed to run place-order dry run')
     },
   })
 
@@ -159,16 +301,28 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
             {purchasedCount} of {needItems.length} items purchased
           </p>
         </div>
-        {list.status !== 'completed' && (
-          <button
-            onClick={() => completeMutation.mutate()}
-            disabled={completeMutation.isPending}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
-          >
-            <Package className="w-4 h-4" />
-            Complete & Update Pantry
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {list.status !== 'completed' && (
+            <button
+              onClick={() => prepareOrderMutation.mutate()}
+              disabled={prepareOrderMutation.isPending}
+              className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
+              title="Maps items to Ocado products and adds them to your cart"
+            >
+              {prepareOrderMutation.isPending ? 'Preparing...' : 'Order on Ocado'}
+            </button>
+          )}
+          {list.status !== 'completed' && (
+            <button
+              onClick={() => completeMutation.mutate()}
+              disabled={completeMutation.isPending}
+              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+            >
+              <Package className="w-4 h-4" />
+              Complete & Update Pantry
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="divide-y divide-gray-100">
@@ -246,6 +400,432 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
             </div>
           </div>
         ))}
+      </div>
+
+      {orderModalOpen && (
+        <OrderOnOcadoModal
+          prepared={prepared}
+          selections={selections}
+          setSelections={(next) => { setSelections(next); setReview(null) }}
+          quantities={quantities}
+          setQuantities={(next) => { setQuantities(next); setReview(null) }}
+          error={orderError}
+          info={orderInfo}
+	          review={review}
+	          reviewPending={reviewMutation.isPending}
+	          result={orderResult}
+	          analysis={orderAnalysis}
+	          slots={slots}
+	          checkoutUrl={checkoutUrl}
+	          dryRunUrl={dryRunUrl}
+          confirmMappingsPending={confirmMappingsMutation.isPending}
+          addToCartPending={addToCartMutation.isPending}
+          onClose={() => setOrderModalOpen(false)}
+          onReview={async () => {
+            setOrderError(null)
+            try {
+              await confirmMappingsMutation.mutateAsync()
+              await reviewMutation.mutateAsync()
+            } catch (e: unknown) {
+              setOrderError(errorMessage(e) || 'Failed to review order')
+            }
+          }}
+          onAddToCart={async () => {
+            setOrderError(null)
+            try {
+              await addToCartMutation.mutateAsync()
+            } catch (e: unknown) {
+              setOrderError(errorMessage(e) || 'Failed to add to cart')
+            }
+          }}
+          onCheckoutDryRun={() => checkoutDryRunMutation.mutate()}
+          checkoutDryRunPending={checkoutDryRunMutation.isPending}
+          onPlaceOrderDryRun={() => placeOrderDryRunMutation.mutate()}
+          placeOrderDryRunPending={placeOrderDryRunMutation.isPending}
+        />
+      )}
+    </div>
+  )
+}
+
+function OrderOnOcadoModal({
+  prepared,
+  selections,
+  setSelections,
+  quantities,
+  setQuantities,
+  error,
+  info,
+  review,
+  reviewPending,
+  result,
+  analysis,
+  slots,
+  checkoutUrl,
+  dryRunUrl,
+  confirmMappingsPending,
+  addToCartPending,
+  onClose,
+  onReview,
+  onAddToCart,
+  onCheckoutDryRun,
+  checkoutDryRunPending,
+  onPlaceOrderDryRun,
+  placeOrderDryRunPending,
+}: {
+  prepared: PreparedOrder | null
+  selections: Record<string, string>
+  setSelections: (next: Record<string, string>) => void
+  quantities: Record<string, number>
+  setQuantities: (next: Record<string, number>) => void
+  error: string | null
+  info: string | null
+  review: OrderReviewResult | null
+  reviewPending: boolean
+  result: AddToCartResult | null
+  analysis: any
+  slots: Array<{ date: string; time: string; price: string; fullText: string }> | null
+  checkoutUrl: string | null
+  dryRunUrl: string | null
+  confirmMappingsPending: boolean
+  addToCartPending: boolean
+  onClose: () => void
+  onReview: () => void
+  onAddToCart: () => void
+  onCheckoutDryRun: () => void
+  checkoutDryRunPending: boolean
+  onPlaceOrderDryRun: () => void
+  placeOrderDryRunPending: boolean
+}) {
+  const needsChoice = prepared?.needsChoice || []
+  const autoMapped = prepared?.autoMapped || []
+  const isBusy = confirmMappingsPending || addToCartPending || reviewPending
+  const missingSelection = needsChoice.some(nc => !selections[nc.ingredientId])
+  const orderCount = autoMapped.length + needsChoice.length
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4">
+      <div className="w-full max-w-3xl bg-white rounded-xl shadow-xl overflow-hidden">
+        <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Order on Ocado</h3>
+            <p className="text-sm text-gray-600">
+              Choose a product for any unmapped ingredients, then we’ll add items to your Ocado cart.
+            </p>
+          </div>
+          <button onClick={onClose} className="text-sm text-gray-600 hover:text-gray-900">
+            Close
+          </button>
+        </div>
+
+        <div className="p-4 space-y-6 max-h-[70vh] overflow-auto">
+          {error && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm">
+              {error}
+            </div>
+          )}
+          {info && (
+            <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 text-sm">
+              {info}
+            </div>
+          )}
+
+          {!prepared ? (
+            <p className="text-sm text-gray-600">Preparing…</p>
+          ) : (
+            <>
+              <div className="text-sm text-gray-700">
+                Will order <span className="font-semibold">{orderCount}</span> items (skips anything marked Have/Purchased).
+              </div>
+
+              {autoMapped.length > 0 && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-3">
+                  <p className="font-medium text-gray-900">Already mapped</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {autoMapped.map(a => (
+                      <div key={a.itemId} className="bg-white border border-gray-200 rounded-lg p-2 flex items-start gap-2">
+                        {a.storeProduct.imageUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={a.storeProduct.imageUrl} alt="" className="w-12 h-12 rounded object-cover bg-gray-100" />
+                        ) : (
+                          <div className="w-12 h-12 rounded bg-gray-100" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{a.ingredientName}</p>
+                          <p className="text-xs text-gray-600 truncate">{a.storeProduct.name}</p>
+                          <p className="text-xs text-gray-500">
+                            {a.storeProduct.lastSeenPrice !== null && a.storeProduct.lastSeenPrice !== undefined
+                              ? `Last seen: £${Number(a.storeProduct.lastSeenPrice).toFixed(2)}`
+                              : 'Last seen price: unknown'}
+                          </p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <label className="text-[11px] text-gray-600">Qty</label>
+                          <input
+                            type="number"
+                            min={1}
+                            value={quantities[a.ingredientId] || 1}
+                            onChange={(e) => setQuantities({ ...quantities, [a.ingredientId]: Math.max(1, parseInt(e.target.value || '1')) })}
+                            className="w-20 px-2 py-1 border border-gray-300 rounded text-sm"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {needsChoice.length > 0 ? (
+                <div className="space-y-4">
+                  {needsChoice.map(item => (
+                    <div key={item.itemId} className="border border-gray-200 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-3 mb-2">
+                        <div>
+                          <p className="text-sm font-semibold text-gray-900">{item.ingredientName}</p>
+                          <p className="text-xs text-gray-600">Search: {item.query}</p>
+                        </div>
+                        <span className="text-xs text-gray-500">{item.candidates.length} candidates</span>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 mb-3">
+                        <label className="text-xs text-gray-600">
+                          Quantity override
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          value={quantities[item.ingredientId] || 1}
+                          onChange={(e) => setQuantities({ ...quantities, [item.ingredientId]: Math.max(1, parseInt(e.target.value || '1')) })}
+                          className="w-24 px-2 py-1 border border-gray-300 rounded text-sm"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        {item.candidates.map(c => {
+                          const selected = selections[item.ingredientId] === c.storeProductId
+                          return (
+                            <button
+                              key={c.storeProductId}
+                              type="button"
+                              onClick={() => setSelections({ ...selections, [item.ingredientId]: c.storeProductId })}
+                              className={clsx(
+                                'border rounded-lg p-2 text-left flex gap-2 items-start hover:bg-gray-50',
+                                selected ? 'border-gray-900 bg-gray-50' : 'border-gray-200'
+                              )}
+                            >
+                              {c.imageUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={c.imageUrl} alt="" className="w-12 h-12 rounded object-cover bg-gray-100" />
+                              ) : (
+                                <div className="w-12 h-12 rounded bg-gray-100" />
+                              )}
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium text-gray-900 truncate">{c.name}</p>
+                                <p className="text-xs text-gray-600">
+                                  {c.price !== null ? `£${c.price.toFixed(2)}` : 'Price unknown'}
+                                </p>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-600">All items are already mapped.</p>
+              )}
+
+              {result && (
+                <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="font-medium">Added to cart.</p>
+                    <a
+                      href="https://www.ocado.com"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm underline"
+                    >
+                      Open Ocado
+                    </a>
+                  </div>
+                  <p>
+                    Cart total: {result.cart.total !== null ? `£${result.cart.total.toFixed(2)}` : 'unknown'} ({result.cart.items.length} items detected)
+                  </p>
+                  {result.skippedAlreadyInCart && result.skippedAlreadyInCart.length > 0 && (
+                    <p className="text-green-900">
+                      Skipped {result.skippedAlreadyInCart.length} items already in cart (idempotent add).
+                    </p>
+                  )}
+                  {result.missingMappings.length > 0 && (
+                    <p className="text-amber-800">
+                      Missing mappings for: {result.missingMappings.map(m => m.ingredientName).join(', ')}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {analysis?.budget && (
+                <div className="p-3 rounded-lg border border-gray-200 bg-white text-sm space-y-2">
+                  <p className="font-medium text-gray-900">Budget & approvals</p>
+                  <p className="text-gray-700">
+                    Budget severity:{' '}
+                    <span className="font-semibold capitalize">{String(analysis.budget.severity || 'unknown')}</span>
+                    {analysis.budget.baselineWeekly
+                      ? ` · baseline £${Number(analysis.budget.baselineWeekly).toFixed(2)}`
+                      : ''}
+                  </p>
+                  {analysis.budget.deltaPct !== null && analysis.budget.deltaPct !== undefined && (
+                    <p className="text-gray-700">
+                      Delta: £{Number(analysis.budget.delta || 0).toFixed(2)} ({Math.round(Number(analysis.budget.deltaPct) * 100)}%)
+                    </p>
+                  )}
+                  {analysis.approvals && (
+                    <p className="text-gray-700">
+                      Auto-approved: {analysis.approvals.autoApproved?.length || 0} · Needs review: {analysis.approvals.needsApproval?.length || 0}
+                    </p>
+                  )}
+                  {analysis.approvals?.needsApproval?.length ? (
+                    <ul className="list-disc pl-5 text-gray-700">
+                      {analysis.approvals.needsApproval.slice(0, 8).map((it: any) => (
+                        <li key={it.purchaseOrderItemId}>
+                          {(it.ingredientName || it.storeProductName || it.rawName)}
+                          {it.reasons?.length ? ` (${it.reasons.join(', ')})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              )}
+
+              {review && (
+                <div className={clsx(
+                  'p-3 rounded-lg border text-sm space-y-2',
+                  review.minimum?.below ? 'bg-amber-50 border-amber-200 text-amber-900' : 'bg-white border-gray-200 text-gray-800'
+                )}>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium">Order review</p>
+                    <p className="text-xs text-gray-600">
+                      Intended: {review.intendedCount} · Will add: {review.willAdd.length} · Already in cart: {review.alreadyInCart.length}
+                    </p>
+                  </div>
+                  <p className="text-sm">
+                    Cart total: {review.cart.total !== null ? `£${review.cart.total.toFixed(2)}` : 'unknown'}
+                  </p>
+                  {review.minimum?.below && (
+                    <p className="text-sm">
+                      Warning: below minimum order value (min £{review.minimum.threshold.toFixed(2)}).
+                    </p>
+                  )}
+                  {review.willAdd.length > 0 && (
+                    <div>
+                      <p className="text-sm font-medium">Will add</p>
+                      <ul className="list-disc pl-5 text-sm">
+                        {review.willAdd.slice(0, 12).map((it) => (
+                          <li key={it.ingredientId}>
+                            {it.ingredientName}: want {it.desiredQuantity}, in cart {it.cartQuantity}, adding {it.delta}
+                          </li>
+                        ))}
+                      </ul>
+                      {review.willAdd.length > 12 && <p className="text-xs text-gray-600 mt-1">Showing first 12.</p>}
+                    </div>
+                  )}
+                  {review.alreadyInCart.length > 0 && (
+                    <div>
+                      <p className="text-sm font-medium">Already in cart (will skip)</p>
+                      <ul className="list-disc pl-5 text-sm">
+                        {review.alreadyInCart.slice(0, 12).map((it) => (
+                          <li key={it.ingredientId}>
+                            {it.ingredientName}: want {it.desiredQuantity}, in cart {it.cartQuantity}
+                          </li>
+                        ))}
+                      </ul>
+                      {review.alreadyInCart.length > 12 && <p className="text-xs text-gray-600 mt-1">Showing first 12.</p>}
+                    </div>
+                  )}
+                  {review.missingMappings.length > 0 && (
+                    <p className="text-sm">
+                      Missing mappings for: {review.missingMappings.map(m => m.ingredientName).join(', ')}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {slots && (
+                <div className="p-3 rounded-lg border border-gray-200 bg-white text-sm space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium text-gray-900">Delivery slots (dry-run)</p>
+                    {checkoutUrl && (
+                      <a href={checkoutUrl} target="_blank" rel="noreferrer" className="text-sm underline text-gray-700">
+                        Open checkout
+                      </a>
+                    )}
+                  </div>
+                  {slots.length === 0 ? (
+                    <p className="text-gray-600">No slots detected. Open Ocado to pick a slot manually.</p>
+                  ) : (
+                    <ul className="text-gray-700 list-disc pl-5">
+                      {slots.slice(0, 8).map((s, idx) => (
+                        <li key={idx}>
+                          {s.fullText} ({s.price})
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              {dryRunUrl && (
+                <div className="p-3 rounded-lg border border-gray-200 bg-white text-sm">
+                  <a href={dryRunUrl} target="_blank" rel="noreferrer" className="underline text-gray-700">
+                    Open last checkout dry-run page
+                  </a>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-gray-200 flex items-center justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={isBusy}
+            className="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+          >
+            Close
+          </button>
+          <button
+            onClick={onCheckoutDryRun}
+            disabled={!prepared || isBusy || checkoutDryRunPending}
+            className="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            title="Find delivery slots (safe: does not place an order)"
+          >
+            {checkoutDryRunPending ? 'Checking…' : 'Check Delivery Slots'}
+          </button>
+          <button
+            onClick={onPlaceOrderDryRun}
+            disabled={!prepared || isBusy || placeOrderDryRunPending}
+            className="px-4 py-2 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+            title="Try stepping through checkout (safe: stops before placing order)"
+          >
+            {placeOrderDryRunPending ? 'Running…' : 'Checkout Dry Run'}
+          </button>
+          <button
+            onClick={onReview}
+            disabled={!prepared || isBusy || missingSelection}
+            className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
+          >
+            {reviewPending || confirmMappingsPending ? 'Reviewing…' : (review ? 'Re-run Review' : 'Review Order')}
+          </button>
+          <button
+            onClick={onAddToCart}
+            disabled={!prepared || isBusy || missingSelection || !review}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+            title={!review ? 'Run review first' : 'Adds items to your cart (idempotent)'}
+          >
+            {addToCartPending ? 'Adding…' : 'Add to Cart'}
+          </button>
+        </div>
       </div>
     </div>
   )

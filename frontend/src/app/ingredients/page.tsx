@@ -788,12 +788,12 @@ function parseIngredientImport(text: string, filename: string): CreateIngredient
   })
 }
 
-function normalizeImportedIngredient(record: any): CreateIngredientInput {
-  const name = record.name || record.Name
-  const category = (record.category || record.Category || 'pantry').toLowerCase()
-  const typicalUnit = record.typicalUnit || record.TypicalUnit || record.unit || record.Unit || 'piece'
-  const calories = record.estimatedCaloriesPerUnit ?? record.Calories
-  const cost = record.estimatedCostPerUnit ?? record.Cost
+function normalizeImportedIngredient(record: Record<string, unknown>): CreateIngredientInput {
+  const name = (record.name ?? record.Name) as unknown
+  const categoryRaw = (record.category ?? record.Category ?? 'pantry') as unknown
+  const typicalUnitRaw = (record.typicalUnit ?? record.TypicalUnit ?? record.unit ?? record.Unit ?? 'piece') as unknown
+  const calories = (record.estimatedCaloriesPerUnit ?? record.Calories) as unknown
+  const cost = (record.estimatedCostPerUnit ?? record.Cost) as unknown
 
   if (!name) {
     throw new Error('Ingredient name is required')
@@ -801,10 +801,10 @@ function normalizeImportedIngredient(record: any): CreateIngredientInput {
 
   return {
     name: String(name).trim(),
-    category,
-    typicalUnit: String(typicalUnit).trim(),
-    estimatedCaloriesPerUnit: calories !== undefined && calories !== '' ? parseFloat(calories) : undefined,
-    estimatedCostPerUnit: cost !== undefined && cost !== '' ? parseFloat(cost) : undefined,
+    category: String(categoryRaw).toLowerCase(),
+    typicalUnit: String(typicalUnitRaw).trim(),
+    estimatedCaloriesPerUnit: calories !== undefined && calories !== '' ? parseFloat(String(calories)) : undefined,
+    estimatedCostPerUnit: cost !== undefined && cost !== '' ? parseFloat(String(cost)) : undefined,
   }
 }
 

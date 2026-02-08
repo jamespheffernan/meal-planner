@@ -33,6 +33,7 @@ Smart meal planning and grocery shopping app with intelligent defaults, batch co
 
 ### Optional
 - **Telegram Bot**: Telegraf (for bot commands)
+- **Online Ordering (Ocado)**: Playwright automation (local-only; requires a saved Playwright `storageState` session)
 
 ## Getting Started
 
@@ -80,6 +81,12 @@ MEAL_PLANNER_ENCRYPTION_KEY=your_32_byte_key_in_hex_or_base64
 
 # Telegram Bot (optional)
 TELEGRAM_BOT_TOKEN=your_telegram_token
+
+# Store integrations (optional)
+ENABLE_STORE_OCADO=true
+ENABLE_SHOPPING_ASSISTANT=false
+ENABLE_SHOPPING_ASSISTANT_TELEGRAM=false
+ORDER_PLACEMENT_ENABLED=false
 ```
 
 Frontend (`frontend/.env.local`):
@@ -104,6 +111,21 @@ The app will be available at:
 - Frontend: http://localhost:3000
 - Backend API: http://localhost:3001
 - Swagger UI: http://localhost:3001/documentation
+
+## Online Ordering (Ocado)
+
+Ocado integration uses Playwright and a saved browser session (`storageState`) stored encrypted in the database.
+
+1. Generate a storageState file (one-time, local):
+```bash
+cd backend
+npx playwright install chromium
+npm run ocado:auth -- --out /tmp/ocado_storage_state.json
+```
+
+2. In the web app: `Settings` → `Online Ordering` → paste or upload that JSON.
+
+3. In `Shopping`, open a list and click `Order on Ocado` to map items and add them to your Ocado cart.
 
 6. (Optional) Run the Telegram bot:
 ```bash
@@ -789,6 +811,7 @@ Weights are stored in UserPreferences.priorityWeights and can be customized per 
 ## CLI Tool
 
 Lightweight HTTP wrapper for API calls. Useful for scripts and automation.
+See `CLI_COOKBOOK.md` for a full list of examples.
 
 ```bash
 cd backend
@@ -811,6 +834,8 @@ npm run cli -- api POST /import/url --data '{"url":"https://example.com"}'
 --header <k:v>          Add header (can repeat)
 --pretty                Pretty-print JSON responses
 --raw                   Print raw response text
+--apply                 Run admin task in write mode
+--dry-run               Run admin task in dry-run mode (default)
 ```
 
 Environment:
@@ -821,6 +846,7 @@ MEAL_PLANNER_API_URL=http://localhost:3001/api npm run cli -- api GET /recipes
 ## Data Pipeline Scripts
 
 Located in `backend/src/scripts/`
+These scripts are also exposed via API under `/api/admin/*` and via CLI as `npm run cli -- admin <task>`.
 
 **normalize-ingredients.ts**
 ```bash
@@ -879,6 +905,19 @@ npm run db:studio
 
 # Seed sample data
 npm run db:seed
+```
+
+The seed script loads the curated ingredient catalog from `backend/prisma/ingredient-catalog.ts`.
+It can also enrich ingredients with Open Food Facts data (calories/images) during seeding.
+
+Optional environment overrides:
+```bash
+# Disable OFF enrichment
+OFF_ENRICH=false
+
+# Tune OFF request concurrency and delay (ms)
+OFF_ENRICH_CONCURRENCY=3
+OFF_ENRICH_DELAY_MS=200
 ```
 
 ## Deployment

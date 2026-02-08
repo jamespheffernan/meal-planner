@@ -1,10 +1,10 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { preferences, ingredients, settings } from '@/lib/api'
-import { useState } from 'react'
+import { preferences, ingredients, settings, discovery, budget, staples, type DiscoverySourceInput, type StapleSuggestion } from '@/lib/api'
+import { useEffect, useState } from 'react'
 import { Save, X, Plus, Heart } from 'lucide-react'
-import type { UserPreferences, Ingredient } from '@/lib/api'
+import type { UserPreferences } from '@/lib/api'
 
 const DAYS_OF_WEEK = [
   { value: 'monday', label: 'Monday' },
@@ -15,6 +15,18 @@ const DAYS_OF_WEEK = [
   { value: 'saturday', label: 'Saturday' },
   { value: 'sunday', label: 'Sunday' },
 ]
+
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (typeof e === 'string') return e
+  const maybe = e as { message?: unknown }
+  if (maybe && typeof maybe.message === 'string') return maybe.message
+  try {
+    return JSON.stringify(e)
+  } catch {
+    return 'Unknown error'
+  }
+}
 
 export default function SettingsPage() {
   const queryClient = useQueryClient()
@@ -39,6 +51,32 @@ export default function SettingsPage() {
     queryFn: settings.getOpenAIKeyStatus,
   })
 
+  const { data: budgetSummary } = useQuery({
+    queryKey: ['budget', 'summary', 8],
+    queryFn: () => budget.summary(8),
+  })
+
+  const { data: ocadoSessionStatus } = useQuery({
+    queryKey: ['settings', 'store-session', 'ocado'],
+    queryFn: () => settings.getStoreSessionStatus('ocado'),
+  })
+
+  const RECIPE_AUTH_HOST = 'cooking.nytimes.com'
+  const { data: recipeAuthStatus } = useQuery({
+    queryKey: ['settings', 'recipe-auth-cookie', RECIPE_AUTH_HOST],
+    queryFn: () => settings.getRecipeAuthCookie(RECIPE_AUTH_HOST),
+  })
+
+  const { data: discoverySources } = useQuery({
+    queryKey: ['discovery', 'sources'],
+    queryFn: discovery.listSources,
+  })
+
+  const { data: stapleSuggestions } = useQuery({
+    queryKey: ['staples', 'suggestions', 12],
+    queryFn: () => staples.suggestions(12),
+  })
+
   const [formData, setFormData] = useState<Partial<UserPreferences>>({})
   const [showDislikeModal, setShowDislikeModal] = useState(false)
   const [showLikeModal, setShowLikeModal] = useState(false)
@@ -46,6 +84,46 @@ export default function SettingsPage() {
   const [verifyMessage, setVerifyMessage] = useState<string | null>(null)
   const [verifyError, setVerifyError] = useState(false)
   const [saveKeyMessage, setSaveKeyMessage] = useState<string | null>(null)
+
+  const [ocadoStorageStateText, setOcadoStorageStateText] = useState('')
+  const [ocadoSessionMessage, setOcadoSessionMessage] = useState<string | null>(null)
+  const [ocadoSessionError, setOcadoSessionError] = useState(false)
+
+  const [selectedStaples, setSelectedStaples] = useState<Record<string, boolean>>({})
+
+  const [recipeCookie, setRecipeCookie] = useState('')
+  const [recipeCookieMessage, setRecipeCookieMessage] = useState<string | null>(null)
+  const [recipeCookieError, setRecipeCookieError] = useState(false)
+
+  const [sourceEdits, setSourceEdits] = useState<DiscoverySourceInput[]>([])
+  const [sourceMessage, setSourceMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (discoverySources?.sources) {
+      setSourceEdits(discoverySources.sources.map(source => ({
+        host: source.host,
+        displayName: source.displayName || '',
+        enabled: source.enabled,
+        sitemapUrls: source.sitemapUrls || [],
+        rssUrls: source.rssUrls || [],
+        weight: source.weight || 1,
+      })))
+    }
+  }, [discoverySources?.sources])
+
+  useEffect(() => {
+    const list = stapleSuggestions?.suggestions || []
+    if (list.length === 0) return
+    setSelectedStaples(prev => {
+      // Only initialize if nothing selected yet.
+      if (Object.keys(prev).length > 0) return prev
+      const next: Record<string, boolean> = {}
+      list.forEach((s: StapleSuggestion) => {
+        next[s.normalizedName] = s.confidence === 'high'
+      })
+      return next
+    })
+  }, [stapleSuggestions?.suggestions])
 
   const updateMutation = useMutation({
     mutationFn: preferences.update,
@@ -75,8 +153,8 @@ export default function SettingsPage() {
       setOpenAiKey('')
       setSaveKeyMessage('Saved.')
     },
-    onError: (error: any) => {
-      setSaveKeyMessage(error?.message || 'Failed to save key')
+    onError: (error: unknown) => {
+      setSaveKeyMessage(errorMessage(error) || 'Failed to save key')
     },
   })
 
@@ -93,11 +171,100 @@ export default function SettingsPage() {
       setVerifyError(false)
       setVerifyMessage(data.model ? `Verified. Model: ${data.model}` : 'Verified.')
     },
-    onError: (error: any) => {
+    onError: (error: unknown) => {
       setVerifyError(true)
-      setVerifyMessage(error?.message || 'Failed to verify key')
+      setVerifyMessage(errorMessage(error) || 'Failed to verify key')
     },
   })
+
+  const saveRecipeCookieMutation = useMutation({
+    mutationFn: () => settings.setRecipeAuthCookie(RECIPE_AUTH_HOST, recipeCookie),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'recipe-auth-cookie', RECIPE_AUTH_HOST] })
+      setRecipeCookie('')
+      setRecipeCookieError(false)
+      setRecipeCookieMessage('Saved.')
+    },
+    onError: (error: unknown) => {
+      setRecipeCookieError(true)
+      setRecipeCookieMessage(errorMessage(error) || 'Failed to save cookie')
+    },
+  })
+
+  const clearRecipeCookieMutation = useMutation({
+    mutationFn: () => settings.clearRecipeAuthCookie(RECIPE_AUTH_HOST),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'recipe-auth-cookie', RECIPE_AUTH_HOST] })
+    },
+  })
+
+  const saveOcadoSessionMutation = useMutation({
+    mutationFn: async () => {
+      const parsed = JSON.parse(ocadoStorageStateText)
+      return settings.setStoreSession('ocado', parsed)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'store-session', 'ocado'] })
+      setOcadoStorageStateText('')
+      setOcadoSessionError(false)
+      setOcadoSessionMessage('Saved.')
+    },
+    onError: (error: unknown) => {
+      setOcadoSessionError(true)
+      setOcadoSessionMessage(errorMessage(error) || 'Failed to save session')
+    },
+  })
+
+  const clearOcadoSessionMutation = useMutation({
+    mutationFn: () => settings.clearStoreSession('ocado'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings', 'store-session', 'ocado'] })
+    },
+  })
+
+  const confirmStaplesMutation = useMutation({
+    mutationFn: (names: string[]) => staples.confirm(names),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['staples', 'suggestions'] })
+    },
+  })
+
+  const saveSourcesMutation = useMutation({
+    mutationFn: (sources: DiscoverySourceInput[]) => discovery.saveSources(sources),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['discovery', 'sources'] })
+      setSourceMessage('Saved.')
+    },
+    onError: (error: unknown) => {
+      setSourceMessage(errorMessage(error) || 'Failed to save sources')
+    },
+  })
+
+  const updateSource = (index: number, patch: Partial<DiscoverySourceInput>) => {
+    setSourceEdits(prev => {
+      const next = [...prev]
+      next[index] = { ...next[index], ...patch }
+      return next
+    })
+  }
+
+  const addSource = () => {
+    setSourceEdits(prev => ([
+      ...prev,
+      { host: '', displayName: '', enabled: true, sitemapUrls: [], rssUrls: [], weight: 1 },
+    ]))
+  }
+
+  const removeSource = (index: number) => {
+    setSourceEdits(prev => prev.filter((_, i) => i !== index))
+  }
+
+  const parseList = (value: string) => value
+    .split(/[,\\n]/)
+    .map(item => item.trim())
+    .filter(Boolean)
+
+  const listToString = (list?: string[]) => (list || []).join('\\n')
 
   const handleSave = () => {
     updateMutation.mutate(formData)
@@ -130,6 +297,18 @@ export default function SettingsPage() {
       {/* Budget & Nutrition */}
       <section className="bg-white rounded-lg shadow p-6 space-y-4">
         <h2 className="text-lg font-semibold text-gray-900">Budget & Nutrition</h2>
+
+        {budgetSummary?.sampleSize ? (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+            Typical weekly spend (from {budgetSummary.sampleSize} week{budgetSummary.sampleSize === 1 ? '' : 's'}):{' '}
+            <span className="font-semibold">£{budgetSummary.typicalWeekly.toFixed(2)}</span>{' '}
+            <span className="text-xs text-gray-500">({budgetSummary.confidence} confidence)</span>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            No purchase history yet. Import Grocery Getter history or log purchase orders to enable budget intelligence.
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -236,6 +415,298 @@ export default function SettingsPage() {
             <p className={`text-sm ${verifyError ? 'text-red-600' : 'text-green-700'}`}>
               {verifyMessage}
             </p>
+          )}
+        </div>
+      </section>
+
+      {/* NYT Auth Cookie */}
+      <section className="bg-white rounded-lg shadow p-6 space-y-4">
+        <h2 className="text-lg font-semibold text-gray-900">NYT Cooking Access</h2>
+        <p className="text-sm text-gray-600">
+          Store a cookie for `cooking.nytimes.com` to access paywalled recipes.
+        </p>
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-gray-900">NYT Cookie</p>
+            <p className="text-xs text-gray-600">
+              Status: {recipeAuthStatus?.hasCookie ? 'Configured' : 'Not set'}
+            </p>
+          </div>
+          {recipeAuthStatus?.hasCookie && (
+            <button
+              onClick={() => clearRecipeCookieMutation.mutate()}
+              disabled={clearRecipeCookieMutation.isPending}
+              className="text-sm text-red-600 hover:text-red-700"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        {!recipeAuthStatus?.encryptionReady && (
+          <p className="text-sm text-red-600">
+            Cannot store cookies yet. Set `MEAL_PLANNER_ENCRYPTION_KEY` in `backend/.env` and restart the server.
+          </p>
+        )}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-gray-700">
+            Paste cookie value
+          </label>
+          <input
+            type="password"
+            value={recipeCookie}
+            onChange={(e) => setRecipeCookie(e.target.value)}
+            placeholder="NYT cookie..."
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+          />
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                setRecipeCookieMessage(null)
+                setRecipeCookieError(false)
+                saveRecipeCookieMutation.mutate()
+              }}
+              disabled={!recipeCookie.trim() || saveRecipeCookieMutation.isPending || !recipeAuthStatus?.encryptionReady}
+              className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
+            >
+              Save Cookie
+            </button>
+            {saveRecipeCookieMutation.isError && (
+              <p className="text-sm text-red-600">
+                {recipeCookieMessage || 'Failed to save cookie.'}
+              </p>
+            )}
+          </div>
+          {!saveRecipeCookieMutation.isError && recipeCookieMessage && (
+            <p className={`text-sm ${recipeCookieError ? 'text-red-600' : 'text-green-700'}`}>
+              {recipeCookieMessage}
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* Online Ordering */}
+      <section className="bg-white rounded-lg shadow p-6 space-y-4">
+        <h2 className="text-lg font-semibold text-gray-900">Online Ordering</h2>
+        <p className="text-sm text-gray-600">
+          Connect Ocado by saving a Playwright <code className="px-1 py-0.5 bg-gray-100 rounded">storageState</code> JSON.
+          This is stored encrypted in your database.
+        </p>
+
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+          <div>
+            <p className="text-sm font-medium text-gray-900">Ocado session</p>
+            <p className="text-xs text-gray-600">
+              Status: {ocadoSessionStatus?.hasSession ? 'Connected' : 'Not connected'}
+            </p>
+          </div>
+          {ocadoSessionStatus?.hasSession && (
+            <button
+              onClick={() => clearOcadoSessionMutation.mutate()}
+              disabled={clearOcadoSessionMutation.isPending}
+              className="text-sm text-red-600 hover:text-red-700"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {!ocadoSessionStatus?.encryptionReady && (
+          <p className="text-sm text-red-600">
+            Cannot store sessions yet. Set <code className="px-1 py-0.5 bg-gray-100 rounded">MEAL_PLANNER_ENCRYPTION_KEY</code> in <code className="px-1 py-0.5 bg-gray-100 rounded">backend/.env</code> and restart the server.
+          </p>
+        )}
+
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-gray-700">
+            Paste storageState JSON
+          </label>
+          <textarea
+            value={ocadoStorageStateText}
+            onChange={(e) => setOcadoStorageStateText(e.target.value)}
+            placeholder='{"cookies":[...],"origins":[...]}'
+            rows={6}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg font-mono text-xs focus:ring-2 focus:ring-gray-900 focus:border-transparent"
+          />
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                setOcadoSessionMessage(null)
+                setOcadoSessionError(false)
+                saveOcadoSessionMutation.mutate()
+              }}
+              disabled={!ocadoStorageStateText.trim() || saveOcadoSessionMutation.isPending || !ocadoSessionStatus?.encryptionReady}
+              className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
+            >
+              Save Session
+            </button>
+            <input
+              type="file"
+              accept="application/json"
+              onChange={async (e) => {
+                const file = e.target.files?.[0]
+                if (!file) return
+                const text = await file.text()
+                setOcadoStorageStateText(text)
+              }}
+              className="text-sm"
+            />
+          </div>
+          {ocadoSessionMessage && (
+            <p className={`text-sm ${ocadoSessionError ? 'text-red-600' : 'text-green-700'}`}>
+              {ocadoSessionMessage}
+            </p>
+          )}
+        </div>
+      </section>
+
+      {/* Staples Suggestions */}
+      <section className="bg-white rounded-lg shadow p-6 space-y-4">
+        <h2 className="text-lg font-semibold text-gray-900">Staples (Suggestions)</h2>
+        <p className="text-sm text-gray-600">
+          These are detected from your purchase history. Confirming a staple makes it eligible for auto-inclusion later.
+        </p>
+
+        {stapleSuggestions?.suggestions?.length ? (
+          <div className="space-y-2">
+            {stapleSuggestions.suggestions.slice(0, 12).map(s => (
+              <label key={s.normalizedName} className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{s.normalizedName}</p>
+                  <p className="text-xs text-gray-600">
+                    {s.purchaseCount} buys · ~{s.avgIntervalDays}d cadence · {s.confidence} confidence
+                  </p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={Boolean(selectedStaples[s.normalizedName])}
+                  onChange={(e) => setSelectedStaples(prev => ({ ...prev, [s.normalizedName]: e.target.checked }))}
+                  className="h-4 w-4"
+                />
+              </label>
+            ))}
+
+            <button
+              onClick={() => {
+                const names = Object.entries(selectedStaples).filter(([, v]) => v).map(([k]) => k)
+                confirmStaplesMutation.mutate(names)
+              }}
+              disabled={confirmStaplesMutation.isPending}
+              className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
+            >
+              {confirmStaplesMutation.isPending ? 'Saving...' : 'Confirm Selected Staples'}
+            </button>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            No suggestions yet. Import Grocery Getter order history or add purchase orders to build signals.
+          </div>
+        )}
+      </section>
+
+      {/* Discovery Sources */}
+      <section className="bg-white rounded-lg shadow p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Discovery Sources</h2>
+            <p className="text-sm text-gray-600">Manage sitemaps and RSS feeds for theme search.</p>
+          </div>
+          <button
+            onClick={addSource}
+            className="px-3 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm hover:bg-gray-50"
+          >
+            Add Source
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          {sourceEdits.map((source, index) => (
+            <div key={`${source.host}-${index}`} className="border border-gray-200 rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <input
+                    type="checkbox"
+                    checked={source.enabled ?? true}
+                    onChange={(e) => updateSource(index, { enabled: e.target.checked })}
+                  />
+                  <span className="text-sm text-gray-700">Enabled</span>
+                </div>
+                <button
+                  onClick={() => removeSource(index)}
+                  className="text-sm text-red-600 hover:text-red-700"
+                >
+                  Remove
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Host</label>
+                  <input
+                    value={source.host}
+                    onChange={(e) => updateSource(index, { host: e.target.value })}
+                    placeholder="example.com"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Display Name</label>
+                  <input
+                    value={source.displayName || ''}
+                    onChange={(e) => updateSource(index, { displayName: e.target.value })}
+                    placeholder="Friendly name"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Weight</label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={source.weight ?? 1}
+                    onChange={(e) => updateSource(index, { weight: e.target.value ? parseInt(e.target.value, 10) : 1 })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Sitemap URLs</label>
+                  <textarea
+                    rows={3}
+                    value={listToString(source.sitemapUrls)}
+                    onChange={(e) => updateSource(index, { sitemapUrls: parseList(e.target.value) })}
+                    placeholder="https://example.com/sitemap.xml"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">RSS URLs</label>
+                  <textarea
+                    rows={3}
+                    value={listToString(source.rssUrls)}
+                    onChange={(e) => updateSource(index, { rssUrls: parseList(e.target.value) })}
+                    placeholder="https://example.com/rss.xml"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => saveSourcesMutation.mutate(sourceEdits)}
+            disabled={saveSourcesMutation.isPending}
+            className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
+          >
+            Save Sources
+          </button>
+          {sourceMessage && (
+            <p className="text-sm text-gray-600">{sourceMessage}</p>
           )}
         </div>
       </section>

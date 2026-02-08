@@ -1,6 +1,14 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type IngredientCategory } from '@prisma/client'
+import { fileURLToPath } from 'node:url'
 
-const prisma = new PrismaClient()
+type CreateIngredientsFromReceiptsResult = {
+  totalReceipts: number
+  totalUniqueItems: number
+  created: number
+  existed: number
+  skipped: number
+  dryRun: boolean
+}
 
 interface ParsedItem {
   name: string
@@ -16,11 +24,11 @@ interface AggregatedItem {
   avgPrice: number
   frequency: number
   units: string[]
-  category: string
+  category: IngredientCategory | 'non-food'
 }
 
 // Valid categories: staple, perishable, pantry, produce, meat, dairy, frozen
-function categorizeItem(name: string): string {
+function categorizeItem(name: string): IngredientCategory | 'non-food' {
   const lower = name.toLowerCase()
 
   // Skip non-food items
@@ -137,7 +145,9 @@ function extractUnit(unit: string, name: string): string {
   return 'piece'
 }
 
-async function main() {
+export async function createIngredientsFromReceipts({ apply }: { apply: boolean }): Promise<CreateIngredientsFromReceiptsResult> {
+  const prisma = new PrismaClient()
+  const dryRun = !apply
   console.log('Fetching receipt data...\n')
 
   // Get all receipts with parsed items
@@ -152,7 +162,7 @@ async function main() {
   const itemMap = new Map<string, AggregatedItem>()
 
   for (const receipt of receipts) {
-    const items = receipt.parsedItems as ParsedItem[]
+    const items = (receipt.parsedItems as unknown as ParsedItem[] | null) || []
 
     for (const item of items) {
       const normalized = normalizeName(item.name)
@@ -191,10 +201,10 @@ async function main() {
   let skipped = 0
   let existed = 0
 
-  const foodCategories = ['meat', 'dairy', 'produce', 'pantry', 'perishable', 'staple', 'frozen']
+  const foodCategories: IngredientCategory[] = ['meat', 'dairy', 'produce', 'pantry', 'perishable', 'staple', 'frozen']
 
   for (const item of sortedItems) {
-    if (!foodCategories.includes(item.category)) {
+    if (item.category === 'non-food') {
       skipped++
       continue
     }
@@ -211,7 +221,7 @@ async function main() {
 
     if (existing) {
       // Update cost estimate if we have price data
-      if (item.avgPrice > 0) {
+      if (item.avgPrice > 0 && !dryRun) {
         await prisma.ingredient.update({
           where: { id: existing.id },
           data: {
@@ -226,14 +236,16 @@ async function main() {
     // Create new ingredient
     const unit = extractUnit(item.units[0] || '', item.name)
 
-    await prisma.ingredient.create({
-      data: {
-        name: item.normalizedName,
-        category: item.category,
-        typicalUnit: unit,
-        estimatedCostPerUnit: item.avgPrice > 0 ? item.avgPrice : null,
-      }
-    })
+    if (!dryRun) {
+      await prisma.ingredient.create({
+        data: {
+          name: item.normalizedName,
+          category: item.category as IngredientCategory,
+          typicalUnit: unit,
+          estimatedCostPerUnit: item.avgPrice > 0 ? item.avgPrice : null,
+        }
+      })
+    }
 
     created++
     console.log(`✓ Created: ${item.normalizedName} (${item.category}) - £${item.avgPrice.toFixed(2)} - bought ${item.frequency}x`)
@@ -247,14 +259,32 @@ async function main() {
   // Show frequency stats for created items
   console.log(`\n--- Most Frequent Purchases ---`)
   const frequent = sortedItems
-    .filter(i => foodCategories.includes(i.category))
+    .filter(i => i.category !== 'non-food')
     .slice(0, 20)
 
   for (const item of frequent) {
     console.log(`  ${item.frequency}x ${item.normalizedName} (£${item.avgPrice.toFixed(2)} avg)`)
   }
 
+  if (dryRun) {
+    console.log('\nDry run only - no writes performed.')
+  }
+
   await prisma.$disconnect()
+  return {
+    totalReceipts: receipts.length,
+    totalUniqueItems: sortedItems.length,
+    created,
+    existed,
+    skipped,
+    dryRun,
+  }
 }
 
-main().catch(console.error)
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url)
+
+if (isDirectRun) {
+  const apply = process.argv.includes('--apply')
+  createIngredientsFromReceipts({ apply })
+    .catch(console.error)
+}

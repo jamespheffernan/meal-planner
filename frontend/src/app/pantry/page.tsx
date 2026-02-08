@@ -53,6 +53,37 @@ export default function PantryPage() {
         </button>
       </div>
 
+      {/* Pantry Sources */}
+      <div className="bg-white rounded-lg shadow p-4">
+        <h2 className="text-sm font-semibold text-gray-900 mb-2">How items get into your pantry</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-600">
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-700">
+              Manual
+            </span>
+            <p>Add items yourself via “Add Item” — best for quick edits or odd items.</p>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700">
+              Check‑in
+            </span>
+            <p>When you mark items as stocked/depleted, they’re tagged as a check‑in.</p>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 px-2 py-0.5 rounded-full text-xs bg-amber-100 text-amber-800">
+              Grocery Trip
+            </span>
+            <p>Items added from receipts or grocery imports are labeled as grocery trip.</p>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">
+              Recipe Deduction
+            </span>
+            <p>When you mark a meal as cooked, quantities are deducted from pantry.</p>
+          </div>
+        </div>
+      </div>
+
       {/* Expiring Alert */}
       {expiringItems && expiringItems.length > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
@@ -141,6 +172,13 @@ function PantryItemRow({ item, onUpdateStatus }: {
   }
 
   const isExpiringSoon = item.expirationDate && new Date(item.expirationDate) < new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+  const sourceLabelMap: Record<string, { label: string; className: string }> = {
+    manual_entry: { label: 'Manual', className: 'bg-gray-100 text-gray-700' },
+    user_checkin: { label: 'Check-in', className: 'bg-blue-100 text-blue-700' },
+    grocery_trip: { label: 'Grocery', className: 'bg-amber-100 text-amber-800' },
+    recipe_deduction: { label: 'Deducted', className: 'bg-green-100 text-green-700' },
+  }
+  const sourceMeta = item.source ? sourceLabelMap[item.source] : null
 
   return (
     <div className={clsx('p-4 flex items-center justify-between', isExpiringSoon && 'bg-amber-50')}>
@@ -155,6 +193,13 @@ function PantryItemRow({ item, onUpdateStatus }: {
           {formatIngredientQuantity(Number(item.quantity), item.unit)}
           {item.expirationDate && ` · Expires ${format(new Date(item.expirationDate), 'MMM d')}`}
         </p>
+        {sourceMeta && (
+          <div className="mt-1">
+            <span className={clsx('inline-flex px-2 py-0.5 text-xs rounded-full', sourceMeta.className)}>
+              {sourceMeta.label}
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -225,7 +270,7 @@ function AddPantryItemModal({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
         <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-          <h2 className="text-lg font-semibold">Add Pantry Item</h2>
+          <h2 className="text-lg font-semibold text-gray-900">Add Pantry Item</h2>
           <button onClick={onClose} className="p-1 hover:bg-gray-100 rounded">
             <X className="w-5 h-5" />
           </button>
@@ -256,8 +301,8 @@ function AddPantryItemModal({ onClose }: { onClose: () => void }) {
                       }}
                       className="w-full p-2 text-left hover:bg-gray-50"
                     >
-                      <p className="font-medium">{ing.name}</p>
-                      <p className="text-xs text-gray-500">{ing.category}</p>
+                      <p className="font-medium text-gray-900">{ing.name}</p>
+                      <p className="text-xs text-gray-700">{ing.category}</p>
                     </button>
                   ))}
                 </div>
