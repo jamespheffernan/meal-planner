@@ -429,7 +429,7 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
     if (!parsed.success) {
       return reply.badRequest('mappings is required')
     }
-    const created = await confirmOcadoMappings(fastify.prisma, parsed.data.mappings)
+    const created = await confirmOcadoMappings(fastify.prisma, (request.params as any).id, parsed.data.mappings)
     return { ok: true, mappings: created }
   })
 

@@ -8,6 +8,43 @@ function shouldOrderItem(item: { assumedHave: boolean; userOverride: UserOverrid
   return !item.assumedHave
 }
 
+function normalize(s: string): string {
+  return s.trim().toLowerCase()
+}
+
+function rankOcadoCandidates(input: {
+  candidates: Array<{ storeProductId: string; name: string; price: number | null }>
+  preferredBrandName?: string | null
+  defaultStoreProductId?: string | null
+  previouslySelectedStoreProductIds?: Set<string>
+}) {
+  const brand = input.preferredBrandName ? normalize(input.preferredBrandName) : null
+  const previously = input.previouslySelectedStoreProductIds || new Set<string>()
+  const defaultId = input.defaultStoreProductId || null
+
+  const scored = input.candidates.map((c) => {
+    let score = 0
+    const name = normalize(c.name)
+    if (brand && name.includes(brand)) score += 100
+    if (defaultId && c.storeProductId === defaultId) score += 80
+    if (previously.has(c.storeProductId)) score += 50
+    if (c.price !== null && Number.isFinite(c.price)) {
+      score += 10
+      score += Math.max(-50, -c.price)
+    } else {
+      score -= 5
+    }
+    return { c, score }
+  })
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score
+    return a.c.name.localeCompare(b.c.name)
+  })
+
+  return scored.map(s => s.c)
+}
+
 export async function prepareOcadoOrderForShoppingList(prisma: PrismaClient, shoppingListId: string, opts?: { maxResultsPerItem?: number }) {
   const provider = 'ocado' as const
   const maxResultsPerItem = opts?.maxResultsPerItem || 5
@@ -15,18 +52,25 @@ export async function prepareOcadoOrderForShoppingList(prisma: PrismaClient, sho
   const list = await prisma.shoppingList.findUnique({
     where: { id: shoppingListId },
     include: {
+      storeOverrides: {
+        where: { provider },
+        include: { storeProduct: true },
+      },
       items: {
         include: {
           ingredient: {
             include: {
               ingredientStoreMappings: {
                 where: {
-                  isDefault: true,
                   storeProduct: { provider },
                 },
                 include: { storeProduct: true },
-                orderBy: { updatedAt: 'desc' },
-                take: 1,
+                orderBy: [
+                  { isDefault: 'desc' },
+                  { lastConfirmedAt: 'desc' },
+                  { updatedAt: 'desc' },
+                ],
+                take: 10,
               },
             },
           },
@@ -53,23 +97,49 @@ export async function prepareOcadoOrderForShoppingList(prisma: PrismaClient, sho
   const ocado = new OcadoAutomation(prisma)
   const now = new Date()
 
-  await ocado.withPage({}, async ({ page }) => {
+  const overrideByIngredientId = new Map(
+    (list.storeOverrides || []).map(o => [o.ingredientId, o])
+  )
+
+  await ocado.withPage({ headless: true }, async ({ page }) => {
     for (const item of neededItems) {
-      const existing = item.ingredient.ingredientStoreMappings?.[0]
-      if (existing?.storeProduct) {
+      const override = overrideByIngredientId.get(item.ingredientId)
+      if (override?.storeProduct) {
         autoMapped.push({
           itemId: item.id,
           ingredientId: item.ingredientId,
           ingredientName: item.ingredient.name,
+          mappingSource: 'this_list',
           storeProduct: {
-            id: existing.storeProduct.id,
-            provider: existing.storeProduct.provider,
-            providerProductId: existing.storeProduct.providerProductId,
-            name: existing.storeProduct.name,
-            imageUrl: existing.storeProduct.imageUrl,
-            productUrl: existing.storeProduct.productUrl,
-            lastSeenPrice: existing.storeProduct.lastSeenPrice,
-            currency: existing.storeProduct.currency,
+            id: override.storeProduct.id,
+            provider: override.storeProduct.provider,
+            providerProductId: override.storeProduct.providerProductId,
+            name: override.storeProduct.name,
+            imageUrl: override.storeProduct.imageUrl,
+            productUrl: override.storeProduct.productUrl,
+            lastSeenPrice: override.storeProduct.lastSeenPrice,
+            currency: override.storeProduct.currency,
+          },
+        })
+        continue
+      }
+
+      const defaultMapping = (item.ingredient.ingredientStoreMappings || []).find(m => m.isDefault && m.storeProduct?.provider === provider)
+      if (defaultMapping?.storeProduct) {
+        autoMapped.push({
+          itemId: item.id,
+          ingredientId: item.ingredientId,
+          ingredientName: item.ingredient.name,
+          mappingSource: 'default',
+          storeProduct: {
+            id: defaultMapping.storeProduct.id,
+            provider: defaultMapping.storeProduct.provider,
+            providerProductId: defaultMapping.storeProduct.providerProductId,
+            name: defaultMapping.storeProduct.name,
+            imageUrl: defaultMapping.storeProduct.imageUrl,
+            productUrl: defaultMapping.storeProduct.productUrl,
+            lastSeenPrice: defaultMapping.storeProduct.lastSeenPrice,
+            currency: defaultMapping.storeProduct.currency,
           },
         })
         continue
@@ -122,6 +192,21 @@ export async function prepareOcadoOrderForShoppingList(prisma: PrismaClient, sho
           productUrl: r.productUrl,
         })
       }
+
+      const previouslySelectedIds = new Set(
+        (item.ingredient.ingredientStoreMappings || [])
+          .filter(m => m.storeProduct?.provider === provider)
+          .map(m => m.storeProductId)
+      )
+
+      const ranked = rankOcadoCandidates({
+        candidates: storedCandidates.map(c => ({ storeProductId: c.storeProductId, name: c.name, price: c.price })),
+        preferredBrandName: item.brand?.brandName || null,
+        defaultStoreProductId: defaultMapping?.storeProductId || null,
+        previouslySelectedStoreProductIds: previouslySelectedIds,
+      })
+      const rankedById = new Map(ranked.map((c, idx) => [c.storeProductId, idx]))
+      storedCandidates.sort((a, b) => (rankedById.get(a.storeProductId) ?? 999) - (rankedById.get(b.storeProductId) ?? 999))
 
       needsChoice.push({
         itemId: item.id,

@@ -130,6 +130,7 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
   const [orderModalOpen, setOrderModalOpen] = useState(false)
   const [prepared, setPrepared] = useState<PreparedOrder | null>(null)
   const [selections, setSelections] = useState<Record<string, string>>({})
+  const [saveAsDefault, setSaveAsDefault] = useState<Record<string, boolean>>({})
   const [quantities, setQuantities] = useState<Record<string, number>>({})
   const [review, setReview] = useState<OrderReviewResult | null>(null)
   const [orderResult, setOrderResult] = useState<AddToCartResult | null>(null)
@@ -162,10 +163,14 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
       setPrepared(data)
       // Initialize selections for auto-mapped items (none needed) and empty for needsChoice.
       const initial: Record<string, string> = {}
+      const defaults: Record<string, boolean> = {}
       data.needsChoice.forEach(nc => {
         if (nc.candidates[0]) initial[nc.ingredientId] = nc.candidates[0].storeProductId
+        // Default to "this list only" to avoid overwriting global defaults unintentionally.
+        defaults[nc.ingredientId] = false
       })
       setSelections(initial)
+      setSaveAsDefault(defaults)
       // Seed quantity overrides for all needed items; piece-like units keep their rounded quantity,
       // everything else defaults to 1 (since store pack sizes vary).
       const q: Record<string, number> = {}
@@ -203,7 +208,7 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
       const mappings = prepared.needsChoice.map(nc => ({
         ingredientId: nc.ingredientId,
         storeProductId: selections[nc.ingredientId],
-        isDefault: true,
+        isDefault: !!saveAsDefault[nc.ingredientId],
       })).filter(m => m.storeProductId)
       if (mappings.length === 0) return { ok: true, mappings: [] }
       return shoppingLists.confirmMappings(list.id, mappings)
@@ -407,6 +412,8 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
           prepared={prepared}
           selections={selections}
           setSelections={(next) => { setSelections(next); setReview(null) }}
+          saveAsDefault={saveAsDefault}
+          setSaveAsDefault={(next) => { setSaveAsDefault(next); setReview(null) }}
           quantities={quantities}
           setQuantities={(next) => { setQuantities(next); setReview(null) }}
           error={orderError}
@@ -452,6 +459,8 @@ function OrderOnOcadoModal({
   prepared,
   selections,
   setSelections,
+  saveAsDefault,
+  setSaveAsDefault,
   quantities,
   setQuantities,
   error,
@@ -476,6 +485,8 @@ function OrderOnOcadoModal({
   prepared: PreparedOrder | null
   selections: Record<string, string>
   setSelections: (next: Record<string, string>) => void
+  saveAsDefault: Record<string, boolean>
+  setSaveAsDefault: (next: Record<string, boolean>) => void
   quantities: Record<string, number>
   setQuantities: (next: Record<string, number>) => void
   error: string | null
@@ -558,6 +569,11 @@ function OrderOnOcadoModal({
                               ? `Last seen: £${Number(a.storeProduct.lastSeenPrice).toFixed(2)}`
                               : 'Last seen price: unknown'}
                           </p>
+                          {a.mappingSource && (
+                            <p className="text-[11px] text-gray-500">
+                              {a.mappingSource === 'this_list' ? 'This list override' : 'Default mapping'}
+                            </p>
+                          )}
                         </div>
                         <div className="flex flex-col items-end gap-1">
                           <label className="text-[11px] text-gray-600">Qty</label>
@@ -598,6 +614,21 @@ function OrderOnOcadoModal({
                           onChange={(e) => setQuantities({ ...quantities, [item.ingredientId]: Math.max(1, parseInt(e.target.value || '1')) })}
                           className="w-24 px-2 py-1 border border-gray-300 rounded text-sm"
                         />
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 mb-3">
+                        <label className="flex items-center gap-2 text-xs text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={!!saveAsDefault[item.ingredientId]}
+                            onChange={(e) => setSaveAsDefault({ ...saveAsDefault, [item.ingredientId]: e.target.checked })}
+                            className="accent-gray-900"
+                          />
+                          Save as default (forever)
+                        </label>
+                        <span className="text-xs text-gray-500">
+                          {saveAsDefault[item.ingredientId] ? 'Updates defaults' : 'This list only'}
+                        </span>
                       </div>
 
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
