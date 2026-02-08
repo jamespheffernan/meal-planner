@@ -101,7 +101,7 @@ export async function prepareOcadoOrderForShoppingList(prisma: PrismaClient, sho
     (list.storeOverrides || []).map(o => [o.ingredientId, o])
   )
 
-  await ocado.withPage({ headless: true }, async ({ page }) => {
+  await ocado.withPage({}, async ({ page }) => {
     for (const item of neededItems) {
       const override = overrideByIngredientId.get(item.ingredientId)
       if (override?.storeProduct) {

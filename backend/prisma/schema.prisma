@@ -495,7 +495,6 @@ model ShoppingListIngredientStoreOverride {
   @@unique([shoppingListId, ingredientId, provider])
   @@map("shopping_list_ingredient_store_overrides")
 }
-
 // === Purchase history (for budget + staples) ===
 
 model PurchaseOrder {

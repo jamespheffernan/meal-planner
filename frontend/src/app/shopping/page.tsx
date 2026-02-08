@@ -418,13 +418,13 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
           setQuantities={(next) => { setQuantities(next); setReview(null) }}
           error={orderError}
           info={orderInfo}
-	          review={review}
-	          reviewPending={reviewMutation.isPending}
-	          result={orderResult}
-	          analysis={orderAnalysis}
-	          slots={slots}
-	          checkoutUrl={checkoutUrl}
-	          dryRunUrl={dryRunUrl}
+          review={review}
+          reviewPending={reviewMutation.isPending}
+          result={orderResult}
+          analysis={orderAnalysis}
+          slots={slots}
+          checkoutUrl={checkoutUrl}
+          dryRunUrl={dryRunUrl}
           confirmMappingsPending={confirmMappingsMutation.isPending}
           addToCartPending={addToCartMutation.isPending}
           onClose={() => setOrderModalOpen(false)}

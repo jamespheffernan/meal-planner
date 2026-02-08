@@ -100,7 +100,7 @@ export async function reviewOcadoShoppingListOrder(
   let cartQtyByProductId: Record<string, number> = {}
   let cart: any = null
 
-  await ocado.withPage({ headless: true }, async ({ page }) => {
+  await ocado.withPage({}, async ({ page }) => {
     cartQtyByProductId = await ocado.getCartQuantitiesByProductId(page).catch(() => ({} as Record<string, number>))
     cart = await ocado.viewCart(page).catch(() => null)
   })

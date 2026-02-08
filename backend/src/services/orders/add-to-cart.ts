@@ -71,7 +71,7 @@ export async function addOcadoShoppingListToCart(
     (list.storeOverrides || []).map(o => [o.ingredientId, o])
   )
 
-  await ocado.withPage({ headless: true }, async ({ page }) => {
+  await ocado.withPage({}, async ({ page }) => {
     // Idempotency: read cart quantities once and only add deltas (never decrease).
     const cartQtyByProductId = await ocado.getCartQuantitiesByProductId(page).catch(() => ({} as Record<string, number>))
 
