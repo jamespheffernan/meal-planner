@@ -35,6 +35,10 @@ export async function reviewOcadoShoppingListOrder(
   const list = await prisma.shoppingList.findUnique({
     where: { id: shoppingListId },
     include: {
+      storeOverrides: {
+        where: { provider },
+        include: { storeProduct: true },
+      },
       items: {
         include: {
           ingredient: {
@@ -71,9 +75,13 @@ export async function reviewOcadoShoppingListOrder(
     desiredQuantity: number
   }> = []
 
+  const overrideByIngredientId = new Map(
+    (list.storeOverrides || []).map(o => [o.ingredientId, o])
+  )
+
   for (const item of neededItems) {
-    const mapping = item.ingredient.ingredientStoreMappings?.[0]
-    const sp = mapping?.storeProduct
+    const override = overrideByIngredientId.get(item.ingredientId)
+    const sp = override?.storeProduct || item.ingredient.ingredientStoreMappings?.[0]?.storeProduct
     if (!sp) {
       missingMappings.push({ itemId: item.id, ingredientId: item.ingredientId, ingredientName: item.ingredient.name })
       continue

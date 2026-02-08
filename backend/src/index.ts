@@ -19,6 +19,7 @@ import budgetRoutes from './routes/budget.js'
 import staplesRoutes from './routes/staples.js'
 import shoppingAssistantRoutes from './routes/shopping-assistant.js'
 import ordersRoutes from './routes/orders.js'
+import mappingsRoutes from './routes/mappings.js'
 
 const fastify = Fastify({
   logger: true,
@@ -49,6 +50,7 @@ async function start() {
   await fastify.register(staplesRoutes, { prefix: '/api/staples' })
   await fastify.register(shoppingAssistantRoutes, { prefix: '/api/shopping-assistant' })
   await fastify.register(ordersRoutes, { prefix: '/api/orders' })
+  await fastify.register(mappingsRoutes, { prefix: '/api/mappings' })
 
   // Health check
   fastify.get('/health', async () => ({ status: 'ok' }))

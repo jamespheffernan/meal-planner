@@ -188,6 +188,7 @@ model Ingredient {
   pantryInventory   PantryInventory[]
   shoppingListItems ShoppingListItem[]
   ingredientStoreMappings IngredientStoreMapping[]
+  shoppingListStoreOverrides ShoppingListIngredientStoreOverride[]
   purchaseOrderItems PurchaseOrderItem[]
   stapleRules        StapleRule[]
   storeProductPreferences StoreProductPreference[]
@@ -353,6 +354,7 @@ model ShoppingList {
   createdAt          DateTime           @default(now()) @map("created_at")
 
   items ShoppingListItem[]
+  storeOverrides ShoppingListIngredientStoreOverride[]
   purchaseOrders PurchaseOrder[]
 
   @@map("shopping_lists")
@@ -449,6 +451,7 @@ model StoreProduct {
   updatedAt         DateTime      @updatedAt @map("updated_at")
 
   ingredientMappings IngredientStoreMapping[]
+  shoppingListOverrides ShoppingListIngredientStoreOverride[]
   orderItems         PurchaseOrderItem[]
   preferences        StoreProductPreference[]
   stapleRules        StapleRule[]
@@ -474,6 +477,24 @@ model IngredientStoreMapping {
   @@map("ingredient_store_mappings")
 }
 
+// Per-shopping-list overrides: select a product for this list without changing the global default mapping.
+model ShoppingListIngredientStoreOverride {
+  id             String        @id @default(uuid())
+  shoppingListId String        @map("shopping_list_id")
+  ingredientId   String        @map("ingredient_id")
+  provider       StoreProvider
+  storeProductId String        @map("store_product_id")
+  lastConfirmedAt DateTime?    @map("last_confirmed_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  shoppingList ShoppingList @relation(fields: [shoppingListId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  storeProduct StoreProduct @relation(fields: [storeProductId], references: [id], onDelete: Cascade)
+
+  @@unique([shoppingListId, ingredientId, provider])
+  @@map("shopping_list_ingredient_store_overrides")
+}
 // === Purchase history (for budget + staples) ===
 
 model PurchaseOrder {

@@ -71,7 +71,7 @@ export async function handleTelegramTokenCallback(ctx: AnyCtx, prisma: PrismaCli
   }
 
   if (payload.type === 'map') {
-    await confirmOcadoMappings(prisma, [{ ingredientId: payload.ingredientId, storeProductId: payload.storeProductId, isDefault: true }])
+    await confirmOcadoMappings(prisma, payload.shoppingListId, [{ ingredientId: payload.ingredientId, storeProductId: payload.storeProductId, isDefault: true }])
     await ctx.answerCbQuery('Saved mapping')
 
     const pending = await getPendingOrder(prisma, chatId)

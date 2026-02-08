@@ -181,6 +181,39 @@ export const shoppingLists = {
     }),
 }
 
+// Mappings (Ingredient <-> Store product)
+export const mappings = {
+  list: (params?: { q?: string; shoppingListId?: string; limit?: number; provider?: StoreProvider }) => {
+    const query = buildQuery({
+      provider: params?.provider,
+      shoppingListId: params?.shoppingListId,
+      q: params?.q,
+      limit: params?.limit,
+    })
+    return fetchApi<{ ok: boolean; provider: StoreProvider; items: IngredientMappingRow[] }>(`/mappings${query}`)
+  },
+  setDefault: (ingredientId: string, storeProductId: string, provider: StoreProvider = 'ocado') =>
+    fetchApi<{ ok: boolean }>(`/mappings/default?provider=${provider}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ingredientId, storeProductId }),
+    }),
+  clearDefault: (ingredientId: string, provider: StoreProvider = 'ocado') =>
+    fetchApi<{ ok: boolean }>(`/mappings/default?provider=${provider}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ ingredientId }),
+    }),
+  setOverride: (shoppingListId: string, ingredientId: string, storeProductId: string, provider: StoreProvider = 'ocado') =>
+    fetchApi<{ ok: boolean }>(`/mappings/override?provider=${provider}`, {
+      method: 'PUT',
+      body: JSON.stringify({ shoppingListId, ingredientId, storeProductId }),
+    }),
+  clearOverride: (shoppingListId: string, ingredientId: string, provider: StoreProvider = 'ocado') =>
+    fetchApi<{ ok: boolean }>(`/mappings/override?provider=${provider}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ shoppingListId, ingredientId }),
+    }),
+}
+
 // Orders
 export const orders = {
   list: (params?: { status?: string; provider?: StoreProvider; limit?: number }) => {
@@ -329,6 +362,7 @@ export interface PreparedOrderAutoMappedItem {
   itemId: string
   ingredientId: string
   ingredientName: string
+  mappingSource?: 'this_list' | 'default'
   storeProduct: {
     id: string
     provider: StoreProvider
@@ -362,6 +396,26 @@ export interface PreparedOrder {
   shoppingListId: string
   autoMapped: PreparedOrderAutoMappedItem[]
   needsChoice: PreparedOrderNeedsChoiceItem[]
+}
+
+export interface MappingStoreProductSummary {
+  storeProductId: string
+  provider: StoreProvider
+  providerProductId: string
+  name: string
+  imageUrl: string | null
+  productUrl: string | null
+  lastSeenPrice: number | null
+  currency: string | null
+}
+
+export interface IngredientMappingRow {
+  ingredientId: string
+  ingredientName: string
+  defaultMapping: MappingStoreProductSummary | null
+  overrideMapping: MappingStoreProductSummary | null
+  effectiveMapping: MappingStoreProductSummary | null
+  effectiveSource: 'this_list' | 'default' | null
 }
 
 export interface StoreCartSummary {
