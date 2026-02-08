@@ -459,6 +459,7 @@ function OrderOnOcadoModal({
   review,
   reviewPending,
   result,
+  analysis,
   slots,
   checkoutUrl,
   dryRunUrl,
@@ -482,6 +483,7 @@ function OrderOnOcadoModal({
   review: OrderReviewResult | null
   reviewPending: boolean
   result: AddToCartResult | null
+  analysis: any
   slots: Array<{ date: string; time: string; price: string; fullText: string }> | null
   checkoutUrl: string | null
   dryRunUrl: string | null
@@ -660,6 +662,39 @@ function OrderOnOcadoModal({
                       Missing mappings for: {result.missingMappings.map(m => m.ingredientName).join(', ')}
                     </p>
                   )}
+                </div>
+              )}
+
+              {analysis?.budget && (
+                <div className="p-3 rounded-lg border border-gray-200 bg-white text-sm space-y-2">
+                  <p className="font-medium text-gray-900">Budget & approvals</p>
+                  <p className="text-gray-700">
+                    Budget severity:{' '}
+                    <span className="font-semibold capitalize">{String(analysis.budget.severity || 'unknown')}</span>
+                    {analysis.budget.baselineWeekly
+                      ? ` · baseline £${Number(analysis.budget.baselineWeekly).toFixed(2)}`
+                      : ''}
+                  </p>
+                  {analysis.budget.deltaPct !== null && analysis.budget.deltaPct !== undefined && (
+                    <p className="text-gray-700">
+                      Delta: £{Number(analysis.budget.delta || 0).toFixed(2)} ({Math.round(Number(analysis.budget.deltaPct) * 100)}%)
+                    </p>
+                  )}
+                  {analysis.approvals && (
+                    <p className="text-gray-700">
+                      Auto-approved: {analysis.approvals.autoApproved?.length || 0} · Needs review: {analysis.approvals.needsApproval?.length || 0}
+                    </p>
+                  )}
+                  {analysis.approvals?.needsApproval?.length ? (
+                    <ul className="list-disc pl-5 text-gray-700">
+                      {analysis.approvals.needsApproval.slice(0, 8).map((it: any) => (
+                        <li key={it.purchaseOrderItemId}>
+                          {(it.ingredientName || it.storeProductName || it.rawName)}
+                          {it.reasons?.length ? ` (${it.reasons.join(', ')})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
               )}
 
