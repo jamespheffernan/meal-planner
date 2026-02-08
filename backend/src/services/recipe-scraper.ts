@@ -13,17 +13,27 @@ interface ScrapedRecipe {
   source: string
 }
 
+interface ScrapeOptions {
+  cookie?: string
+  extraHeaders?: Record<string, string>
+}
+
 /**
  * Scrape recipe data from a URL
  * Supports schema.org/Recipe JSON-LD markup and common recipe site patterns
  */
-export async function scrapeRecipeFromUrl(url: string): Promise<ScrapedRecipe> {
-  const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; MealPlannerBot/1.0)',
-      'Accept': 'text/html,application/xhtml+xml',
-    },
-  })
+export async function scrapeRecipeFromUrl(url: string, options: ScrapeOptions = {}): Promise<ScrapedRecipe> {
+  const headers: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (compatible; MealPlannerBot/1.0)',
+    'Accept': 'text/html,application/xhtml+xml',
+    ...options.extraHeaders,
+  }
+
+  if (options.cookie) {
+    headers.Cookie = options.cookie
+  }
+
+  const response = await fetch(url, { headers })
 
   if (!response.ok) {
     throw new Error(`Failed to fetch URL: ${response.status}`)

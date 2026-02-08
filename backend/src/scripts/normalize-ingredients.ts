@@ -1,8 +1,15 @@
 import { PrismaClient } from '@prisma/client'
 import OpenAI from 'openai'
+import { fileURLToPath } from 'node:url'
 
-const prisma = new PrismaClient()
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+type NormalizeIngredientsResult = {
+  recipesProcessed: number
+  uniqueTexts: number
+  normalizedCount: number
+  uniqueNormalizedNames: number
+  updatedRecipeIngredients: number
+  dryRun: boolean
+}
 
 interface ParsedIngredient {
   name: string           // normalized name like "celery", "onion", "chicken breast"
@@ -39,7 +46,7 @@ interface RecipeIngredientMapping {
   parsed: ParsedIngredient
 }
 
-async function parseIngredientText(ingredientTexts: string[]): Promise<ParsedIngredient[]> {
+async function parseIngredientText(openai: OpenAI, ingredientTexts: string[]): Promise<ParsedIngredient[]> {
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
@@ -95,7 +102,7 @@ async function searchOpenFoodFacts(ingredientName: string): Promise<{
 
     if (!response.ok) return null
 
-    const data = await response.json()
+    const data: any = await response.json()
     if (!data.products?.length) return null
 
     // Find best match
@@ -115,7 +122,10 @@ async function searchOpenFoodFacts(ingredientName: string): Promise<{
   }
 }
 
-async function main() {
+export async function normalizeIngredients({ apply }: { apply: boolean }): Promise<NormalizeIngredientsResult> {
+  const prisma = new PrismaClient()
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  const dryRun = !apply
   console.log('Starting ingredient normalization...\n')
 
   // Get all recipes with their ingredients
@@ -158,7 +168,7 @@ async function main() {
     console.log(`Processing batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(allTexts.length / batchSize)}...`)
 
     try {
-      const parsed = await parseIngredientText(batch)
+      const parsed = await parseIngredientText(openai, batch)
 
       for (let j = 0; j < batch.length; j++) {
         if (parsed[j]) {
@@ -187,6 +197,7 @@ async function main() {
 
   // Create or update normalized ingredients
   const ingredientIdMap = new Map<string, string>() // normalized name -> ingredient id
+  const missingIngredients: string[] = []
 
   for (const [name, parsed] of uniqueNormalizedNames) {
     // Check if normalized ingredient already exists
@@ -194,7 +205,7 @@ async function main() {
       where: { name: { equals: name, mode: 'insensitive' } }
     })
 
-    if (!ingredient) {
+    if (!ingredient && !dryRun) {
       // Look up nutrition from Open Food Facts
       console.log(`Looking up nutrition for: ${name}`)
       const nutrition = await searchOpenFoodFacts(name)
@@ -210,11 +221,15 @@ async function main() {
         }
       })
       console.log(`  Created: ${name} (${parsed.category}, ${parsed.unit})${nutrition?.imageUrl ? ' [has image]' : ''}`)
-    } else {
+    } else if (ingredient) {
       console.log(`  Exists: ${name}`)
     }
 
-    ingredientIdMap.set(name, ingredient.id)
+    if (ingredient) {
+      ingredientIdMap.set(name, ingredient.id)
+    } else if (dryRun) {
+      missingIngredients.push(name)
+    }
   }
 
   console.log(`\nUpdating recipe ingredients...\n`)
@@ -226,23 +241,27 @@ async function main() {
   for (const [originalText, parsed] of normalizedIngredients) {
     const newIngredientId = ingredientIdMap.get(parsed.name)
     if (!newIngredientId) {
-      console.error(`No ingredient ID for: ${parsed.name}`)
-      errors++
+      if (!dryRun) {
+        console.error(`No ingredient ID for: ${parsed.name}`)
+        errors++
+      }
       continue
     }
 
     const mappings = ingredientTexts.get(originalText) || []
     for (const mapping of mappings) {
       try {
-        await prisma.recipeIngredient.update({
-          where: { id: mapping.recipeIngredientId },
-          data: {
-            ingredientId: newIngredientId,
-            quantity: parsed.quantity,
-            unit: parsed.unit,
-            notes: parsed.notes || null,
-          }
-        })
+        if (!dryRun) {
+          await prisma.recipeIngredient.update({
+            where: { id: mapping.recipeIngredientId },
+            data: {
+              ingredientId: newIngredientId,
+              quantity: parsed.quantity,
+              unit: parsed.unit,
+              notes: parsed.notes || null,
+            }
+          })
+        }
         updated++
       } catch (error) {
         console.error(`Failed to update ${mapping.recipeIngredientId}:`, error)
@@ -254,23 +273,30 @@ async function main() {
   console.log(`\nUpdated ${updated} recipe ingredients (${errors} errors)\n`)
 
   // Clean up orphaned ingredients (not linked to any recipe)
-  const orphaned = await prisma.ingredient.findMany({
-    where: {
-      recipeIngredients: { none: {} },
-      pantryInventory: { none: {} },
-      shoppingListItems: { none: {} },
-    }
-  })
-
-  console.log(`Found ${orphaned.length} orphaned ingredients to delete\n`)
-
-  if (orphaned.length > 0) {
-    await prisma.ingredient.deleteMany({
+  if (!dryRun) {
+    const orphaned = await prisma.ingredient.findMany({
       where: {
-        id: { in: orphaned.map(i => i.id) }
+        recipeIngredients: { none: {} },
+        pantryInventory: { none: {} },
+        shoppingListItems: { none: {} },
       }
     })
-    console.log(`Deleted ${orphaned.length} orphaned ingredients\n`)
+
+    console.log(`Found ${orphaned.length} orphaned ingredients to delete\n`)
+
+    if (orphaned.length > 0) {
+      await prisma.ingredient.deleteMany({
+        where: {
+          id: { in: orphaned.map(i => i.id) }
+        }
+      })
+      console.log(`Deleted ${orphaned.length} orphaned ingredients\n`)
+    }
+  } else {
+    console.log('Dry run only - no writes performed.')
+    if (missingIngredients.length > 0) {
+      console.log(`Missing ingredient records (dry run): ${missingIngredients.length}`)
+    }
   }
 
   // Final stats
@@ -280,8 +306,22 @@ async function main() {
   console.log('=== Final Stats ===')
   console.log(`Ingredients: ${finalIngredients}`)
   console.log(`Recipe-Ingredient links: ${finalRecipeIngredients}`)
+  await prisma.$disconnect()
+
+  return {
+    recipesProcessed: recipes.length,
+    uniqueTexts: ingredientTexts.size,
+    normalizedCount: normalizedIngredients.size,
+    uniqueNormalizedNames: uniqueNormalizedNames.size,
+    updatedRecipeIngredients: updated,
+    dryRun,
+  }
 }
 
-main()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect())
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url)
+
+if (isDirectRun) {
+  const apply = process.argv.includes('--apply')
+  normalizeIngredients({ apply })
+    .catch(console.error)
+}

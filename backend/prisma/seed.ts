@@ -1,255 +1,191 @@
 import { PrismaClient } from '@prisma/client'
+import { ingredientCatalog } from './ingredient-catalog.js'
 
 const prisma = new PrismaClient()
+
+type OffLookupResult = {
+  calories?: number
+  protein?: number
+  carbs?: number
+  fat?: number
+  imageUrl?: string
+  productName?: string
+}
+
+const OFF_ENRICH = process.env.OFF_ENRICH !== 'false'
+const OFF_ENRICH_CONCURRENCY = Math.max(1, Number(process.env.OFF_ENRICH_CONCURRENCY ?? 3))
+const OFF_ENRICH_DELAY_MS = Math.max(0, Number(process.env.OFF_ENRICH_DELAY_MS ?? 200))
+
+function sleep(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function searchOpenFoodFacts(ingredientName: string): Promise<OffLookupResult | null> {
+  try {
+    const query = encodeURIComponent(ingredientName)
+    const response = await fetch(
+      `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${query}&search_simple=1&action=process&json=1&page_size=8&fields=product_name,generic_name,nutriments,image_url,image_front_url,image_front_small_url`,
+      { headers: { 'User-Agent': 'MealPlanner/1.0' } }
+    )
+
+    if (!response.ok) return null
+
+    const data = await response.json()
+    if (!data.products?.length) return null
+
+    const normalizedQuery = ingredientName.toLowerCase()
+    const ranked = data.products
+      .map((product: any) => {
+        const n = product.nutriments || {}
+        const calories = n['energy-kcal_100g'] || n['energy-kcal']
+        const protein = n.proteins_100g || n.proteins
+        const carbs = n.carbohydrates_100g || n.carbohydrates
+        const fat = n.fat_100g || n.fat
+        const imageUrl = product.image_front_url || product.image_url || product.image_front_small_url
+        const nameText = `${product.product_name || ''} ${product.generic_name || ''}`.toLowerCase()
+        const nameMatch = nameText.includes(normalizedQuery)
+        const hasCalories = Boolean(calories)
+        const score = (nameMatch ? 5 : 0) + (hasCalories ? 4 : 0) + (imageUrl ? 1 : 0)
+        return {
+          score,
+          productName: product.product_name,
+          calories,
+          protein,
+          carbs,
+          fat,
+          imageUrl,
+        }
+      })
+      .sort((a: any, b: any) => b.score - a.score)
+
+    const withCalories = ranked.find((item: any) => item.calories !== undefined)
+    const withImage = ranked.find((item: any) => item.imageUrl)
+    const best = withCalories || withImage || ranked[0]
+
+    if (!best?.calories && !best?.imageUrl) return null
+
+    return {
+      productName: best.productName,
+      calories: best.calories,
+      protein: best.protein,
+      carbs: best.carbs,
+      fat: best.fat,
+      imageUrl: best.imageUrl,
+    }
+  } catch (error) {
+    console.warn(`Open Food Facts error for ${ingredientName}:`, error)
+    return null
+  }
+}
+
+async function runWithConcurrency<T, R>(items: T[], limit: number, handler: (item: T, index: number) => Promise<R>) {
+  let idx = 0
+  const results: R[] = new Array(items.length)
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (idx < items.length) {
+      const current = idx++
+      results[current] = await handler(items[current], current)
+    }
+  })
+  await Promise.all(workers)
+  return results
+}
+
+async function seedIngredientsFromCatalog() {
+  let enriched = 0
+  let failures = 0
+
+  await runWithConcurrency(ingredientCatalog, OFF_ENRICH_CONCURRENCY, async (item) => {
+    let offData: OffLookupResult | null = null
+
+    if (OFF_ENRICH && item.estimatedCaloriesPerUnit === undefined) {
+      if (OFF_ENRICH_DELAY_MS) {
+        await sleep(OFF_ENRICH_DELAY_MS)
+      }
+      offData = await searchOpenFoodFacts(item.name)
+    }
+
+    try {
+      const existing = await prisma.ingredient.findUnique({ where: { name: item.name } })
+      if (existing) {
+        const shouldUpdateCalories = existing.estimatedCaloriesPerUnit === null && offData?.calories !== undefined
+        const shouldUpdateImage = !existing.imageUrl && offData?.imageUrl
+        if (shouldUpdateCalories || shouldUpdateImage) {
+          await prisma.ingredient.update({
+            where: { id: existing.id },
+            data: {
+              ...(shouldUpdateCalories ? { estimatedCaloriesPerUnit: offData?.calories } : {}),
+              ...(shouldUpdateImage ? { imageUrl: offData?.imageUrl } : {}),
+            },
+          })
+          enriched += 1
+        }
+      } else {
+        await prisma.ingredient.create({
+          data: {
+            ...item,
+            estimatedCaloriesPerUnit: item.estimatedCaloriesPerUnit ?? offData?.calories,
+            estimatedCostPerUnit: item.estimatedCostPerUnit,
+            imageUrl: offData?.imageUrl,
+          },
+        })
+        if (offData?.calories || offData?.imageUrl) {
+          enriched += 1
+        }
+      }
+    } catch (error) {
+      failures += 1
+      console.warn(`Failed to seed ingredient "${item.name}":`, error)
+    }
+  })
+
+  console.log(`Seeded ${ingredientCatalog.length} ingredients (${enriched} enriched, ${failures} failed)`)
+}
+
+async function buildIngredientIdMap(names: string[]) {
+  const unique = Array.from(new Set(names))
+  const records = await prisma.ingredient.findMany({
+    where: { name: { in: unique } },
+    select: { id: true, name: true },
+  })
+  const map = new Map(records.map(r => [r.name, r.id]))
+  const missing = unique.filter(name => !map.has(name))
+  if (missing.length > 0) {
+    throw new Error(`Missing ingredients for seed recipes: ${missing.join(', ')}`)
+  }
+  return map
+}
 
 async function main() {
   console.log('Seeding database...')
 
-  // Create ingredients
-  const ingredients = await Promise.all([
-    // Proteins
-    prisma.ingredient.upsert({
-      where: { name: 'chicken breast' },
-      update: {},
-      create: {
-        name: 'chicken breast',
-        category: 'meat',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 1.65,
-        estimatedCostPerUnit: 0.008,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'ground beef' },
-      update: {},
-      create: {
-        name: 'ground beef',
-        category: 'meat',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 2.5,
-        estimatedCostPerUnit: 0.012,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'salmon fillet' },
-      update: {},
-      create: {
-        name: 'salmon fillet',
-        category: 'meat',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 2.08,
-        estimatedCostPerUnit: 0.025,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'eggs' },
-      update: {},
-      create: {
-        name: 'eggs',
-        category: 'dairy',
-        typicalUnit: 'piece',
-        estimatedCaloriesPerUnit: 70,
-        estimatedCostPerUnit: 0.30,
-      },
-    }),
+  await seedIngredientsFromCatalog()
 
-    // Dairy
-    prisma.ingredient.upsert({
-      where: { name: 'butter' },
-      update: {},
-      create: {
-        name: 'butter',
-        category: 'dairy',
-        typicalUnit: 'tbsp',
-        estimatedCaloriesPerUnit: 100,
-        estimatedCostPerUnit: 0.15,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'milk' },
-      update: {},
-      create: {
-        name: 'milk',
-        category: 'dairy',
-        typicalUnit: 'ml',
-        estimatedCaloriesPerUnit: 0.42,
-        estimatedCostPerUnit: 0.001,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'parmesan cheese' },
-      update: {},
-      create: {
-        name: 'parmesan cheese',
-        category: 'dairy',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 4.31,
-        estimatedCostPerUnit: 0.02,
-      },
-    }),
+  const seedIngredientNames = [
+    'chicken breast',
+    'ground beef',
+    'salmon fillet',
+    'eggs',
+    'butter',
+    'milk',
+    'parmesan cheese',
+    'onion',
+    'garlic',
+    'tomatoes',
+    'spinach',
+    'lemon',
+    'broccoli',
+    'olive oil',
+    'salt',
+    'black pepper',
+    'soy sauce',
+    'pasta',
+    'rice',
+    'canned tomatoes',
+    'chicken stock',
+  ]
 
-    // Produce
-    prisma.ingredient.upsert({
-      where: { name: 'onion' },
-      update: {},
-      create: {
-        name: 'onion',
-        category: 'produce',
-        typicalUnit: 'piece',
-        estimatedCaloriesPerUnit: 44,
-        estimatedCostPerUnit: 0.30,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'garlic' },
-      update: {},
-      create: {
-        name: 'garlic',
-        category: 'produce',
-        typicalUnit: 'clove',
-        estimatedCaloriesPerUnit: 4,
-        estimatedCostPerUnit: 0.10,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'tomatoes' },
-      update: {},
-      create: {
-        name: 'tomatoes',
-        category: 'produce',
-        typicalUnit: 'piece',
-        estimatedCaloriesPerUnit: 22,
-        estimatedCostPerUnit: 0.40,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'spinach' },
-      update: {},
-      create: {
-        name: 'spinach',
-        category: 'produce',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 0.23,
-        estimatedCostPerUnit: 0.015,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'lemon' },
-      update: {},
-      create: {
-        name: 'lemon',
-        category: 'produce',
-        typicalUnit: 'piece',
-        estimatedCaloriesPerUnit: 17,
-        estimatedCostPerUnit: 0.35,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'broccoli' },
-      update: {},
-      create: {
-        name: 'broccoli',
-        category: 'produce',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 0.34,
-        estimatedCostPerUnit: 0.005,
-      },
-    }),
-
-    // Pantry staples
-    prisma.ingredient.upsert({
-      where: { name: 'olive oil' },
-      update: {},
-      create: {
-        name: 'olive oil',
-        category: 'staple',
-        typicalUnit: 'tbsp',
-        estimatedCaloriesPerUnit: 120,
-        estimatedCostPerUnit: 0.10,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'salt' },
-      update: {},
-      create: {
-        name: 'salt',
-        category: 'staple',
-        typicalUnit: 'tsp',
-        estimatedCaloriesPerUnit: 0,
-        estimatedCostPerUnit: 0.01,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'black pepper' },
-      update: {},
-      create: {
-        name: 'black pepper',
-        category: 'staple',
-        typicalUnit: 'tsp',
-        estimatedCaloriesPerUnit: 6,
-        estimatedCostPerUnit: 0.05,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'soy sauce' },
-      update: {},
-      create: {
-        name: 'soy sauce',
-        category: 'staple',
-        typicalUnit: 'tbsp',
-        estimatedCaloriesPerUnit: 8,
-        estimatedCostPerUnit: 0.08,
-      },
-    }),
-
-    // Pantry
-    prisma.ingredient.upsert({
-      where: { name: 'pasta' },
-      update: {},
-      create: {
-        name: 'pasta',
-        category: 'pantry',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 1.31,
-        estimatedCostPerUnit: 0.003,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'rice' },
-      update: {},
-      create: {
-        name: 'rice',
-        category: 'pantry',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 1.30,
-        estimatedCostPerUnit: 0.002,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'canned tomatoes' },
-      update: {},
-      create: {
-        name: 'canned tomatoes',
-        category: 'pantry',
-        typicalUnit: 'g',
-        estimatedCaloriesPerUnit: 0.18,
-        estimatedCostPerUnit: 0.003,
-      },
-    }),
-    prisma.ingredient.upsert({
-      where: { name: 'chicken stock' },
-      update: {},
-      create: {
-        name: 'chicken stock',
-        category: 'pantry',
-        typicalUnit: 'ml',
-        estimatedCaloriesPerUnit: 0.05,
-        estimatedCostPerUnit: 0.002,
-      },
-    }),
-  ])
-
-  console.log(`Created ${ingredients.length} ingredients`)
+  const ingredientIdByName = await buildIngredientIdMap(seedIngredientNames)
 
   // Create sample recipes
   const chickenStirFry = await prisma.recipe.create({
@@ -267,12 +203,12 @@ async function main() {
       approvalStatus: 'approved',
       recipeIngredients: {
         create: [
-          { ingredientId: ingredients[0].id, quantity: 500, unit: 'g' },
-          { ingredientId: ingredients[7].id, quantity: 1, unit: 'piece' },
-          { ingredientId: ingredients[8].id, quantity: 3, unit: 'clove' },
-          { ingredientId: ingredients[12].id, quantity: 200, unit: 'g' },
-          { ingredientId: ingredients[16].id, quantity: 2, unit: 'tbsp' },
-          { ingredientId: ingredients[13].id, quantity: 1, unit: 'tbsp' },
+          { ingredientId: ingredientIdByName.get('chicken breast')!, quantity: 500, unit: 'g' },
+          { ingredientId: ingredientIdByName.get('onion')!, quantity: 1, unit: 'piece' },
+          { ingredientId: ingredientIdByName.get('garlic')!, quantity: 3, unit: 'clove' },
+          { ingredientId: ingredientIdByName.get('broccoli')!, quantity: 200, unit: 'g' },
+          { ingredientId: ingredientIdByName.get('olive oil')!, quantity: 2, unit: 'tbsp' },
+          { ingredientId: ingredientIdByName.get('soy sauce')!, quantity: 1, unit: 'tbsp' },
         ],
       },
       recipeInstructions: {
@@ -303,13 +239,13 @@ async function main() {
       approvalStatus: 'approved',
       recipeIngredients: {
         create: [
-          { ingredientId: ingredients[1].id, quantity: 500, unit: 'g' },
-          { ingredientId: ingredients[17].id, quantity: 400, unit: 'g' },
-          { ingredientId: ingredients[7].id, quantity: 1, unit: 'piece' },
-          { ingredientId: ingredients[8].id, quantity: 4, unit: 'clove' },
-          { ingredientId: ingredients[19].id, quantity: 400, unit: 'g' },
-          { ingredientId: ingredients[6].id, quantity: 50, unit: 'g' },
-          { ingredientId: ingredients[13].id, quantity: 2, unit: 'tbsp' },
+          { ingredientId: ingredientIdByName.get('ground beef')!, quantity: 500, unit: 'g' },
+          { ingredientId: ingredientIdByName.get('pasta')!, quantity: 400, unit: 'g' },
+          { ingredientId: ingredientIdByName.get('onion')!, quantity: 1, unit: 'piece' },
+          { ingredientId: ingredientIdByName.get('garlic')!, quantity: 4, unit: 'clove' },
+          { ingredientId: ingredientIdByName.get('canned tomatoes')!, quantity: 400, unit: 'g' },
+          { ingredientId: ingredientIdByName.get('parmesan cheese')!, quantity: 50, unit: 'g' },
+          { ingredientId: ingredientIdByName.get('olive oil')!, quantity: 2, unit: 'tbsp' },
         ],
       },
       recipeInstructions: {
@@ -340,12 +276,12 @@ async function main() {
       approvalStatus: 'approved',
       recipeIngredients: {
         create: [
-          { ingredientId: ingredients[2].id, quantity: 300, unit: 'g' },
-          { ingredientId: ingredients[11].id, quantity: 1, unit: 'piece' },
-          { ingredientId: ingredients[4].id, quantity: 2, unit: 'tbsp' },
-          { ingredientId: ingredients[10].id, quantity: 100, unit: 'g' },
-          { ingredientId: ingredients[14].id, quantity: 0.5, unit: 'tsp' },
-          { ingredientId: ingredients[15].id, quantity: 0.25, unit: 'tsp' },
+          { ingredientId: ingredientIdByName.get('salmon fillet')!, quantity: 300, unit: 'g' },
+          { ingredientId: ingredientIdByName.get('lemon')!, quantity: 1, unit: 'piece' },
+          { ingredientId: ingredientIdByName.get('butter')!, quantity: 2, unit: 'tbsp' },
+          { ingredientId: ingredientIdByName.get('spinach')!, quantity: 100, unit: 'g' },
+          { ingredientId: ingredientIdByName.get('salt')!, quantity: 0.5, unit: 'tsp' },
+          { ingredientId: ingredientIdByName.get('black pepper')!, quantity: 0.25, unit: 'tsp' },
         ],
       },
       recipeInstructions: {
@@ -376,11 +312,11 @@ async function main() {
       approvalStatus: 'approved',
       recipeIngredients: {
         create: [
-          { ingredientId: ingredients[3].id, quantity: 4, unit: 'piece' },
-          { ingredientId: ingredients[4].id, quantity: 1, unit: 'tbsp' },
-          { ingredientId: ingredients[5].id, quantity: 30, unit: 'ml' },
-          { ingredientId: ingredients[14].id, quantity: 0.25, unit: 'tsp' },
-          { ingredientId: ingredients[15].id, quantity: 0.1, unit: 'tsp' },
+          { ingredientId: ingredientIdByName.get('eggs')!, quantity: 4, unit: 'piece' },
+          { ingredientId: ingredientIdByName.get('butter')!, quantity: 1, unit: 'tbsp' },
+          { ingredientId: ingredientIdByName.get('milk')!, quantity: 30, unit: 'ml' },
+          { ingredientId: ingredientIdByName.get('salt')!, quantity: 0.25, unit: 'tsp' },
+          { ingredientId: ingredientIdByName.get('black pepper')!, quantity: 0.1, unit: 'tsp' },
         ],
       },
       recipeInstructions: {
@@ -459,7 +395,7 @@ async function main() {
   // Add some pantry items
   await prisma.pantryInventory.create({
     data: {
-      ingredientId: ingredients[13].id, // olive oil
+      ingredientId: ingredientIdByName.get('olive oil')!, // olive oil
       quantity: 500,
       unit: 'ml',
       acquiredDate: new Date(),
@@ -470,7 +406,7 @@ async function main() {
 
   await prisma.pantryInventory.create({
     data: {
-      ingredientId: ingredients[14].id, // salt
+      ingredientId: ingredientIdByName.get('salt')!, // salt
       quantity: 1,
       unit: 'container',
       acquiredDate: new Date(),
@@ -481,7 +417,7 @@ async function main() {
 
   await prisma.pantryInventory.create({
     data: {
-      ingredientId: ingredients[17].id, // pasta
+      ingredientId: ingredientIdByName.get('pasta')!, // pasta
       quantity: 500,
       unit: 'g',
       acquiredDate: new Date(),
@@ -492,7 +428,7 @@ async function main() {
 
   await prisma.pantryInventory.create({
     data: {
-      ingredientId: ingredients[18].id, // rice
+      ingredientId: ingredientIdByName.get('rice')!, // rice
       quantity: 1000,
       unit: 'g',
       acquiredDate: new Date(),
@@ -507,7 +443,7 @@ async function main() {
 
   await prisma.pantryInventory.create({
     data: {
-      ingredientId: ingredients[0].id, // chicken
+      ingredientId: ingredientIdByName.get('chicken breast')!, // chicken
       quantity: 400,
       unit: 'g',
       acquiredDate: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
@@ -519,12 +455,15 @@ async function main() {
 
   console.log('Created pantry items')
 
-  console.log('Seeding completed!')
+  void chickenStirFry
+  void spaghettiSauce
+  void salmonDinner
+  void scrambledEggs
 }
 
 main()
-  .catch((e) => {
-    console.error(e)
+  .catch((error) => {
+    console.error(error)
     process.exit(1)
   })
   .finally(async () => {

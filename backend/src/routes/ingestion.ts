@@ -5,10 +5,13 @@ import { normalizeIngredientName } from '../services/ingredient-normalizer.js'
 import { parseIngredientString } from '../services/ingredient-parser.js'
 import { canonicalizeUnit } from '../services/units.js'
 import { parsePaprikaExport, deduplicateRecipes, type ImportedRecipe } from '../services/paprika-import.js'
+import { getRecipeAuthCookie } from '../services/recipe-auth.js'
 
 interface UrlImportBody {
   url: string
   autoApprove?: boolean
+  useAuth?: boolean
+  cookie?: string
 }
 
 interface ImageImportBody {
@@ -41,6 +44,33 @@ interface ReceiptImportBody {
   applyMatches?: boolean
 }
 
+interface BulkImportBody {
+  urls: string[]
+  autoApprove?: boolean
+  useAuth?: boolean
+  cookie?: string
+  concurrency?: number
+  skipExisting?: boolean
+  urlRegex?: string
+  slowDown?: boolean
+  delayMs?: number
+  jitterMs?: number
+}
+
+interface SitemapImportBody {
+  sitemapUrl: string
+  autoApprove?: boolean
+  useAuth?: boolean
+  cookie?: string
+  concurrency?: number
+  skipExisting?: boolean
+  maxUrls?: number
+  urlRegex?: string
+  slowDown?: boolean
+  delayMs?: number
+  jitterMs?: number
+}
+
 // Helper to extract URL from image field (can be string or ImageObject)
 function extractImageUrl(image: unknown): string | undefined {
   if (!image) return undefined
@@ -60,14 +90,22 @@ function extractImageUrl(image: unknown): string | undefined {
 export default async function ingestionRoutes(fastify: FastifyInstance) {
   // Import recipe from URL
   fastify.post('/url', async (request: FastifyRequest<{ Body: UrlImportBody }>, reply) => {
-    const { url, autoApprove = false } = request.body
+    const { url, autoApprove = false, useAuth = true, cookie } = request.body
 
     if (!url) {
       return reply.badRequest('URL is required')
     }
 
     try {
-      const scraped = await scrapeRecipeFromUrl(url)
+      let authCookie: string | undefined
+      if (cookie && cookie.trim()) {
+        authCookie = cookie.trim()
+      } else if (useAuth) {
+        const hostname = new URL(url).hostname
+        authCookie = await getRecipeAuthCookie(fastify.prisma, hostname) || undefined
+      }
+
+      const scraped = await scrapeRecipeFromUrl(url, authCookie ? { cookie: authCookie } : undefined)
 
       // Create recipe in database
       const recipe = await createRecipeFromScraped(fastify, scraped, autoApprove)
@@ -76,9 +114,149 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
         success: true,
         recipe,
         scraped, // Include raw scraped data for debugging/review
+        auth: {
+          used: Boolean(authCookie),
+          source: authCookie ? (cookie ? 'request' : 'stored') : 'none',
+        },
       }
     } catch (error) {
       return reply.badRequest(`Failed to import from URL: ${error}`)
+    }
+  })
+
+  // Import recipes from a list of URLs
+  fastify.post('/bulk', async (request: FastifyRequest<{ Body: BulkImportBody }>, reply) => {
+    const {
+      urls,
+      autoApprove = false,
+      useAuth = true,
+      cookie,
+      concurrency = 4,
+      skipExisting = true,
+      urlRegex,
+      slowDown = true,
+      delayMs,
+      jitterMs,
+    } = request.body
+
+    if (!urls || urls.length === 0) {
+      return reply.badRequest('urls array is required')
+    }
+
+    const filtered = filterUrls(urls, urlRegex)
+    if (filtered.length === 0) {
+      return reply.badRequest('No URLs matched urlRegex filter')
+    }
+
+    const existingSources = skipExisting
+      ? new Set((await fastify.prisma.recipe.findMany({ select: { source: true } }))
+        .map(r => r.source)
+        .filter(Boolean) as string[])
+      : new Set<string>()
+
+    const uniqueUrls = Array.from(new Set(filtered))
+    const skippedExisting = skipExisting ? uniqueUrls.filter(u => existingSources.has(u)) : []
+    const toProcess = skipExisting ? uniqueUrls.filter(u => !existingSources.has(u)) : uniqueUrls
+
+    const authCache = new Map<string, string | null>()
+    const delayConfig = getDelayConfig({ slowDown, delayMs, jitterMs })
+    const results = await runWithConcurrency(toProcess, clampConcurrency(concurrency), async (url) => {
+      try {
+        const authCookie = await resolveAuthCookie(fastify, url, { useAuth, cookie }, authCache)
+        const scraped = await scrapeRecipeFromUrl(url, authCookie ? { cookie: authCookie } : undefined)
+        const recipe = await createRecipeFromScraped(fastify, scraped, autoApprove)
+        return { url, recipeId: recipe.id }
+      } catch (error) {
+        return { url, error: String(error) }
+      }
+    }, delayConfig)
+
+    const imported = results.filter(r => 'recipeId' in r)
+    const errors = results.filter(r => 'error' in r)
+
+    return {
+      success: true,
+      requested: urls.length,
+      matched: filtered.length,
+      processed: toProcess.length,
+      imported: imported.length,
+      skippedExisting: skippedExisting.length,
+      errors: errors.length > 0 ? errors : undefined,
+    }
+  })
+
+  // Discover URLs from a sitemap and import
+  fastify.post('/sitemap', async (request: FastifyRequest<{ Body: SitemapImportBody }>, reply) => {
+    const {
+      sitemapUrl,
+      autoApprove = false,
+      useAuth = true,
+      cookie,
+      concurrency = 4,
+      skipExisting = true,
+      maxUrls = 500,
+      urlRegex,
+      slowDown = true,
+      delayMs,
+      jitterMs,
+    } = request.body
+
+    if (!sitemapUrl) {
+      return reply.badRequest('sitemapUrl is required')
+    }
+
+    try {
+      const discovered = await fetchSitemapUrls(sitemapUrl, maxUrls)
+      const filtered = filterUrls(discovered, urlRegex)
+
+      if (filtered.length === 0) {
+        return {
+          success: true,
+          discovered: discovered.length,
+          matched: 0,
+          imported: 0,
+          skippedExisting: 0,
+        }
+      }
+
+      const existingSources = skipExisting
+        ? new Set((await fastify.prisma.recipe.findMany({ select: { source: true } }))
+          .map(r => r.source)
+          .filter(Boolean) as string[])
+        : new Set<string>()
+
+      const uniqueUrls = Array.from(new Set(filtered))
+      const skippedExisting = skipExisting ? uniqueUrls.filter(u => existingSources.has(u)) : []
+      const toProcess = skipExisting ? uniqueUrls.filter(u => !existingSources.has(u)) : uniqueUrls
+
+      const authCache = new Map<string, string | null>()
+      const delayConfig = getDelayConfig({ slowDown, delayMs, jitterMs })
+      const results = await runWithConcurrency(toProcess, clampConcurrency(concurrency), async (url) => {
+        try {
+          const authCookie = await resolveAuthCookie(fastify, url, { useAuth, cookie }, authCache)
+          const scraped = await scrapeRecipeFromUrl(url, authCookie ? { cookie: authCookie } : undefined)
+          const recipe = await createRecipeFromScraped(fastify, scraped, autoApprove)
+          return { url, recipeId: recipe.id }
+        } catch (error) {
+          return { url, error: String(error) }
+        }
+      }, delayConfig)
+
+      const imported = results.filter(r => 'recipeId' in r)
+      const errors = results.filter(r => 'error' in r)
+
+      return {
+        success: true,
+        sitemapUrl,
+        discovered: discovered.length,
+        matched: filtered.length,
+        processed: toProcess.length,
+        imported: imported.length,
+        skippedExisting: skippedExisting.length,
+        errors: errors.length > 0 ? errors : undefined,
+      }
+    } catch (error) {
+      return reply.badRequest(`Failed to import from sitemap: ${error}`)
     }
   })
 
@@ -448,6 +626,146 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
       estimates,
     }
   })
+}
+
+function clampConcurrency(value: number | undefined): number {
+  if (!value || Number.isNaN(value)) return 4
+  return Math.min(Math.max(Math.floor(value), 1), 12)
+}
+
+async function resolveAuthCookie(
+  fastify: FastifyInstance,
+  url: string,
+  options: { useAuth: boolean; cookie?: string },
+  cache: Map<string, string | null>
+): Promise<string | undefined> {
+  if (options.cookie && options.cookie.trim()) {
+    return options.cookie.trim()
+  }
+  if (!options.useAuth) return undefined
+
+  const hostname = new URL(url).hostname
+  if (cache.has(hostname)) {
+    return cache.get(hostname) || undefined
+  }
+  const stored = await getRecipeAuthCookie(fastify.prisma, hostname)
+  cache.set(hostname, stored)
+  return stored || undefined
+}
+
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+  delay?: { baseMs: number; jitterMs: number }
+): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let nextIndex = 0
+
+  async function runNext() {
+    const current = nextIndex
+    if (current >= items.length) return
+    nextIndex += 1
+    if (delay) {
+      await sleep(delay.baseMs + Math.floor(Math.random() * (delay.jitterMs + 1)))
+    }
+    results[current] = await worker(items[current], current)
+    await runNext()
+  }
+
+  const runners = Array.from({ length: Math.min(limit, items.length) }, () => runNext())
+  await Promise.all(runners)
+  return results
+}
+
+function getDelayConfig(options: { slowDown: boolean; delayMs?: number; jitterMs?: number }) {
+  if (!options.slowDown) return undefined
+  const baseMs = Math.max(0, Math.floor(options.delayMs ?? 400))
+  const jitter = Math.max(0, Math.floor(options.jitterMs ?? 600))
+  return { baseMs, jitterMs: jitter }
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) return Promise.resolve()
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function filterUrls(urls: string[], urlRegex?: string): string[] {
+  const trimmed = urls.map(u => u.trim()).filter(Boolean)
+  if (!urlRegex) return trimmed
+
+  let regex: RegExp
+  try {
+    regex = new RegExp(urlRegex)
+  } catch {
+    return trimmed
+  }
+
+  return trimmed.filter(u => regex.test(u))
+}
+
+async function fetchSitemapUrls(sitemapUrl: string, maxUrls: number): Promise<string[]> {
+  const queue = [sitemapUrl]
+  const seen = new Set<string>()
+  const urls: string[] = []
+  let depth = 0
+
+  while (queue.length > 0 && urls.length < maxUrls && depth < 2) {
+    const current = queue.shift()
+    if (!current || seen.has(current)) continue
+    seen.add(current)
+
+    const response = await fetch(current, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; MealPlannerBot/1.0)',
+        'Accept': 'application/xml,text/xml,application/xhtml+xml',
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch sitemap: ${response.status}`)
+    }
+
+    const xml = await response.text()
+    const locs = extractLocs(xml)
+
+    if (isSitemapIndex(xml)) {
+      queue.push(...locs)
+      depth += 1
+    } else {
+      for (const loc of locs) {
+        if (urls.length >= maxUrls) break
+        urls.push(loc)
+      }
+    }
+  }
+
+  return urls
+}
+
+function extractLocs(xml: string): string[] {
+  const locs: string[] = []
+  const regex = /<loc>([^<]+)<\/loc>/gi
+  let match: RegExpExecArray | null
+  while ((match = regex.exec(xml)) !== null) {
+    const raw = match[1].trim()
+    if (!raw) continue
+    locs.push(decodeXmlEntities(raw))
+  }
+  return locs
+}
+
+function isSitemapIndex(xml: string): boolean {
+  return /<sitemapindex[\s>]/i.test(xml)
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
 }
 
 function normalizeReceiptText(text: string): string {
