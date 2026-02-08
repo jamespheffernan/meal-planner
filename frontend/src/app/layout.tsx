@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Providers } from "@/components/providers";
 import { Navigation } from "@/components/navigation";
-import { Agentation } from "agentation";
+import { AgentationDev } from "@/components/agentation-dev";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -36,7 +36,7 @@ export default function RootLayout({
             {children}
           </main>
         </Providers>
-        {process.env.NODE_ENV === "development" && <Agentation />}
+        <AgentationDev />
       </body>
     </html>
   );
