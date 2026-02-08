@@ -5,6 +5,7 @@ import { detectStaplesFromOrders } from '../staples/detector.js'
 import { prepareOcadoOrderForShoppingList } from '../orders/prepare-order.js'
 import { checkoutDryRunForShoppingList } from '../orders/ocado-ordering.js'
 import { addOcadoShoppingListToCart } from '../orders/add-to-cart.js'
+import { analyzePurchaseOrder } from '../orders/analyze.js'
 
 type Channel = 'telegram' | 'web'
 
@@ -133,8 +134,28 @@ Be concise and practical (2-6 sentences). If you cannot perform an action due to
     {
       type: 'function',
       function: {
+        name: 'get_due_staples',
+        description: 'List confirmed staples that are likely due for re-order.',
+        parameters: {
+          type: 'object',
+          properties: { max: { type: 'integer', minimum: 1, maximum: 200, default: 25 } },
+          required: [],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'start_order_on_ocado',
         description: 'Prepare the active shopping list for ordering on Ocado (maps items and returns choices).',
+        parameters: { type: 'object', properties: {}, required: [] },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'analyze_active_order',
+        description: 'Analyze the latest pending/approved order for the active shopping list (budget + approvals).',
         parameters: { type: 'object', properties: {}, required: [] },
       },
     },
@@ -217,6 +238,31 @@ Be concise and practical (2-6 sentences). If you cannot perform an action due to
         } else if (name === 'get_staple_suggestions') {
           const suggestions = await detectStaplesFromOrders(prisma, { weeks: Number(args?.weeks || 12) })
           result = { suggestions: suggestions.slice(0, 15) }
+        } else if (name === 'get_due_staples') {
+          const max = Number(args?.max || 25)
+          const rules = await prisma.stapleRule.findMany({
+            where: { enabled: true },
+            include: { ingredient: true },
+            orderBy: { updatedAt: 'desc' },
+            take: Math.min(200, max * 3),
+          })
+          const now = Date.now()
+          const due = rules.filter((r) => {
+            if (r.lastSuggestedAt) {
+              const ageDays = (now - new Date(r.lastSuggestedAt).getTime()) / (1000 * 60 * 60 * 24)
+              if (ageDays < 1.0) return false
+            }
+            if (!r.lastPurchasedAt) return true
+            const ageDays = (now - new Date(r.lastPurchasedAt).getTime()) / (1000 * 60 * 60 * 24)
+            return ageDays >= r.reorderAfterDays
+          }).slice(0, max)
+          result = {
+            due: due.map(d => ({
+              normalizedName: d.normalizedName,
+              ingredientName: d.ingredient?.name || null,
+              reorderAfterDays: d.reorderAfterDays,
+            })),
+          }
         } else if (name === 'start_order_on_ocado') {
           const list = await prisma.shoppingList.findFirst({
             where: { status: { in: ['draft', 'ready', 'shopping'] } },
@@ -250,6 +296,25 @@ Be concise and practical (2-6 sentences). If you cannot perform an action due to
             result = { error: 'No active shopping list.' }
           } else {
             result = await addOcadoShoppingListToCart(prisma, list.id)
+          }
+        } else if (name === 'analyze_active_order') {
+          const list = await prisma.shoppingList.findFirst({
+            where: { status: { in: ['draft', 'ready', 'shopping'] } },
+            orderBy: { createdAt: 'desc' },
+          })
+          if (!list) {
+            result = { error: 'No active shopping list.' }
+          } else {
+            const order = await prisma.purchaseOrder.findFirst({
+              where: { shoppingListId: list.id, source: 'from_shopping_list', status: { in: ['pending', 'approved'] } },
+              orderBy: { createdAt: 'desc' },
+              select: { id: true },
+            })
+            if (!order) {
+              result = { error: 'No pending/approved order yet. Add the list to cart first.' }
+            } else {
+              result = await analyzePurchaseOrder(prisma, order.id)
+            }
           }
         } else {
           result = { error: `Unknown tool: ${name}` }
