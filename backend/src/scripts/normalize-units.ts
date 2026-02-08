@@ -7,14 +7,24 @@
  */
 
 import { PrismaClient } from '@prisma/client'
+import { fileURLToPath } from 'node:url'
 import { canonicalizeUnit, type CanonicalUnit } from '../services/units.js'
 import { parseIngredientString } from '../services/ingredient-parser.js'
 
-const prisma = new PrismaClient()
-const BATCH_SIZE = 100
-const dryRun = !process.argv.includes('--apply')
+type NormalizeUnitsResult = {
+  mode: 'DRY_RUN' | 'APPLY'
+  recipeIngredientsUpdated: number
+  recipeIngredientsReparsed: number
+  pantryUpdated: number
+  shoppingListItemsUpdated: number
+  ingredientsUpdated: number
+}
 
-async function main() {
+const BATCH_SIZE = 100
+
+export async function normalizeUnits({ apply }: { apply: boolean }): Promise<NormalizeUnitsResult> {
+  const prisma = new PrismaClient()
+  const dryRun = !apply
   console.log(`Mode: ${dryRun ? 'DRY RUN' : 'APPLY'}`)
 
   // 1. Normalize RecipeIngredient units
@@ -153,8 +163,23 @@ async function main() {
   console.log(`  Updated: ${ingUpdated}`)
 
   console.log(`\nDone. ${dryRun ? 'Run with --apply to commit changes.' : 'Changes committed.'}`)
+  await prisma.$disconnect()
+
+  return {
+    mode: dryRun ? 'DRY_RUN' : 'APPLY',
+    recipeIngredientsUpdated: riUpdated,
+    recipeIngredientsReparsed: riReparsed,
+    pantryUpdated,
+    shoppingListItemsUpdated: sliUpdated,
+    ingredientsUpdated: ingUpdated,
+  }
 }
 
-main()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect())
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url)
+
+if (isDirectRun) {
+  const apply = process.argv.includes('--apply')
+  normalizeUnits({ apply })
+    .catch(console.error)
+    .finally(() => process.exit(0))
+}

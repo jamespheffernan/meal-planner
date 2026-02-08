@@ -1,13 +1,20 @@
 import { PrismaClient } from '@prisma/client'
+import { fileURLToPath } from 'node:url'
 import { normalizeIngredientName } from '../services/ingredient-normalizer.js'
 
-const prisma = new PrismaClient()
+type NormalizeIngredientNamesResult = {
+  groups: number
+  mergedDuplicates: number
+  renamed: number
+}
 
-async function main() {
+export async function normalizeIngredientNames(): Promise<NormalizeIngredientNamesResult> {
+  const prisma = new PrismaClient()
   const ingredients = await prisma.ingredient.findMany()
   if (ingredients.length === 0) {
     console.log('No ingredients found.')
-    return
+    await prisma.$disconnect()
+    return { groups: 0, mergedDuplicates: 0, renamed: 0 }
   }
 
   const groups = new Map<string, typeof ingredients>()
@@ -23,6 +30,8 @@ async function main() {
   console.log(`Found ${groups.size} normalized ingredient groups.`)
 
   const prefs = await prisma.userPreferences.findMany()
+  let mergedDuplicates = 0
+  let renamed = 0
 
   for (const [normalized, group] of groups) {
     if (!normalized) continue
@@ -30,6 +39,7 @@ async function main() {
 
     if (duplicates.length > 0) {
       console.log(`Merging ${duplicates.length} duplicates into "${normalized}"`)
+      mergedDuplicates += duplicates.length
     }
 
     for (const dup of duplicates) {
@@ -86,6 +96,7 @@ async function main() {
           where: { id: target.id },
           data: { name: normalized },
         })
+        renamed += 1
       } catch (error) {
         console.warn(`Failed to rename "${target.name}" -> "${normalized}":`, error)
       }
@@ -93,13 +104,16 @@ async function main() {
   }
 
   console.log('Normalization complete.')
+  await prisma.$disconnect()
+  return { groups: groups.size, mergedDuplicates, renamed }
 }
 
-main()
-  .catch((error) => {
-    console.error(error)
-    process.exit(1)
-  })
-  .finally(async () => {
-    await prisma.$disconnect()
-  })
+const isDirectRun = process.argv[1] === fileURLToPath(import.meta.url)
+
+if (isDirectRun) {
+  normalizeIngredientNames()
+    .catch((error) => {
+      console.error(error)
+      process.exit(1)
+    })
+}

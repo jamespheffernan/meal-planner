@@ -2,6 +2,14 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { ShoppingListStatus, UserOverride } from '@prisma/client'
 import { Decimal } from '@prisma/client/runtime/library'
 import { canonicalizeUnit, getUnitKind, toBaseUnit, getBestDisplayUnit, type CanonicalUnit, type MeasurementSystem } from '../services/units.js'
+import { z } from 'zod'
+import { OcadoAutomation } from '../services/stores/ocado/ocado-automation.js'
+import { checkoutDryRunForShoppingList } from '../services/orders/ocado-ordering.js'
+import { prepareOcadoOrderForShoppingList } from '../services/orders/prepare-order.js'
+import { confirmOcadoMappings } from '../services/orders/mappings.js'
+import { addOcadoShoppingListToCart } from '../services/orders/add-to-cart.js'
+import { transitionPurchaseOrderUpdateData } from '../services/orders/lifecycle.js'
+import { reviewOcadoShoppingListOrder } from '../services/orders/review.js'
 
 interface ShoppingListParams {
   id: string
@@ -20,9 +28,49 @@ interface UpdateItemBody {
   actualCost?: number
 }
 
+const PrepareOrderQuerySchema = z.object({
+  provider: z.enum(['ocado']).optional(),
+})
+
+const PrepareOrderBodySchema = z.object({
+  maxResultsPerItem: z.number().int().min(1).max(20).optional(),
+})
+
+const ConfirmMappingsSchema = z.object({
+  mappings: z.array(z.object({
+    ingredientId: z.string().min(1),
+    storeProductId: z.string().min(1),
+    isDefault: z.boolean().optional(),
+  })).min(1),
+})
+
+const AddToCartSchema = z.object({
+  provider: z.enum(['ocado']).optional(),
+  quantityOverrides: z.record(z.string(), z.number().int().min(1).max(50)).optional(),
+})
+
+const ReviewOrderSchema = z.object({
+  provider: z.enum(['ocado']).optional(),
+  quantityOverrides: z.record(z.string(), z.number().int().min(1).max(50)).optional(),
+})
+
+const CheckoutDryRunSchema = z.object({
+  provider: z.enum(['ocado']).optional(),
+  selectSlot: z.boolean().optional(),
+  slotIndex: z.number().int().min(0).max(50).optional(),
+})
+
+const PlaceOrderSchema = z.object({
+  provider: z.enum(['ocado']).optional(),
+  dryRun: z.boolean().optional(),
+  confirm: z.boolean().optional(),
+})
+
 // Staple categories that are assumed to be in stock
 const STAPLE_CATEGORIES = ['staple']
 const PERISHABLE_CATEGORIES = ['perishable', 'produce', 'meat', 'dairy']
+
+// Note: ordering logic lives in services/orders/*
 
 export default async function shoppingListRoutes(fastify: FastifyInstance) {
   // List shopping lists
@@ -349,6 +397,132 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
     })
 
     return result
+  })
+
+  // === Online ordering flow ===
+
+  // Prepare order: map shopping list items to store products (auto vs needs choice)
+  fastify.post('/:id/order/prepare', async (request: FastifyRequest, reply) => {
+    const qParsed = PrepareOrderQuerySchema.safeParse(request.query || {})
+    const bParsed = PrepareOrderBodySchema.safeParse(request.body || {})
+    if (!qParsed.success || !bParsed.success) {
+      return reply.badRequest('Invalid request')
+    }
+
+    const provider = qParsed.data.provider || 'ocado'
+    if (provider !== 'ocado') {
+      return reply.badRequest('Only ocado is supported for now')
+    }
+
+    const result = await prepareOcadoOrderForShoppingList(
+      fastify.prisma,
+      (request.params as any).id,
+      { maxResultsPerItem: bParsed.data.maxResultsPerItem || 5 }
+    )
+    if (!result.ok) return reply.notFound(result.error)
+    return result
+  })
+
+  // Confirm mappings chosen by user
+  fastify.post('/:id/order/confirm-mappings', async (request: FastifyRequest, reply) => {
+    const parsed = ConfirmMappingsSchema.safeParse(request.body || {})
+    if (!parsed.success) {
+      return reply.badRequest('mappings is required')
+    }
+    const created = await confirmOcadoMappings(fastify.prisma, (request.params as any).id, parsed.data.mappings)
+    return { ok: true, mappings: created }
+  })
+
+  // Review / diff before mutating the cart. Safe: read-only.
+  fastify.post('/:id/order/review', async (request: FastifyRequest, reply) => {
+    const parsed = ReviewOrderSchema.safeParse(request.body || {})
+    if (!parsed.success) return reply.badRequest('Invalid request')
+
+    const provider = parsed.data.provider || 'ocado'
+    if (provider !== 'ocado') return reply.badRequest('Only ocado is supported for now')
+    const quantityOverrides = parsed.data.quantityOverrides || {}
+
+    const result = await reviewOcadoShoppingListOrder(fastify.prisma, (request.params as any).id, { quantityOverrides })
+    if (!result.ok) return reply.notFound(result.error)
+    return result
+  })
+
+  // Add mapped items to Ocado cart
+  fastify.post('/:id/order/add-to-cart', async (request: FastifyRequest, reply) => {
+    const parsed = AddToCartSchema.safeParse(request.body || {})
+    if (!parsed.success) return reply.badRequest('Invalid request')
+
+    const provider = parsed.data.provider || 'ocado'
+    if (provider !== 'ocado') return reply.badRequest('Only ocado is supported for now')
+    const quantityOverrides = parsed.data.quantityOverrides || {}
+    const result = await addOcadoShoppingListToCart(fastify.prisma, (request.params as any).id, { quantityOverrides })
+    if (!result.ok) return reply.notFound(result.error)
+    return result
+  })
+
+  // Checkout dry-run (delivery slot discovery). Safe: does not place an order.
+  fastify.post('/:id/order/checkout/dry-run', async (request: FastifyRequest, reply) => {
+    const parsed = CheckoutDryRunSchema.safeParse(request.body || {})
+    if (!parsed.success) return reply.badRequest('Invalid request')
+
+    const provider = parsed.data.provider || 'ocado'
+    if (provider !== 'ocado') return reply.badRequest('Only ocado is supported for now')
+
+    return checkoutDryRunForShoppingList(fastify.prisma, (request.params as any).id, {
+      selectSlot: parsed.data.selectSlot,
+      slotIndex: parsed.data.slotIndex,
+    })
+  })
+
+  // Place order (dangerous). Dry-run by default.
+  fastify.post('/:id/order/place-order', async (request: FastifyRequest, reply) => {
+    const parsed = PlaceOrderSchema.safeParse(request.body || {})
+    if (!parsed.success) return reply.badRequest('Invalid request')
+
+    const provider = parsed.data.provider || 'ocado'
+    if (provider !== 'ocado') return reply.badRequest('Only ocado is supported for now')
+
+    const dryRun = parsed.data.dryRun ?? true
+    const confirm = parsed.data.confirm ?? false
+    if (!dryRun) {
+      const enabled = ['1', 'true', 'yes', 'on'].includes(String(process.env.ORDER_PLACEMENT_ENABLED || 'false').toLowerCase())
+      if (!enabled) return reply.badRequest('Order placement disabled (set ORDER_PLACEMENT_ENABLED=true).')
+      if (!confirm) return reply.badRequest('confirm=true required to place an order.')
+    }
+
+    // Enforce lifecycle: only approved orders can be placed (real placement only).
+    if (!dryRun) {
+      const latest = await fastify.prisma.purchaseOrder.findFirst({
+        where: { shoppingListId: (request.params as any).id, provider: 'ocado', source: 'from_shopping_list' },
+        orderBy: { createdAt: 'desc' },
+      })
+      if (!latest) return reply.badRequest('No order found for this shopping list (add to cart first).')
+      if (latest.status !== 'approved') return reply.badRequest(`Order must be approved before placing (current: ${latest.status}).`)
+    }
+
+    const ocado = new OcadoAutomation(fastify.prisma)
+    const place = await ocado.withPage({}, async ({ page }) => {
+      return ocado.placeOrder(page, { dryRun })
+    })
+
+    // Update latest order status for this list.
+    const existing = await fastify.prisma.purchaseOrder.findFirst({
+      where: { shoppingListId: (request.params as any).id, provider: 'ocado', source: 'from_shopping_list' },
+      orderBy: { createdAt: 'desc' },
+    })
+    if (existing) {
+      const data: any = { checkoutUrl: place.url }
+      if (place.ok && !dryRun) {
+        if (existing.status !== 'approved') return reply.badRequest('Order must be approved before placing (run checkout dry-run first).')
+        Object.assign(data, transitionPurchaseOrderUpdateData(existing as any, 'placed'))
+      }
+      await fastify.prisma.purchaseOrder.update({
+        where: { id: existing.id },
+        data,
+      }).catch(() => undefined)
+    }
+
+    return place
   })
 
   // Delete shopping list

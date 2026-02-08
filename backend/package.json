@@ -10,6 +10,9 @@
     "start": "node dist/index.js",
     "bot": "tsx src/bot/index.ts",
     "cli": "tsx src/cli/index.ts",
+    "ocado:auth": "tsx src/scripts/ocado-auth.ts",
+    "ocado:smoke": "tsx src/scripts/ocado-smoke.ts",
+    "import:grocery-getter": "tsx src/scripts/import-grocery-getter.ts",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
@@ -34,8 +37,10 @@
     "heic-convert": "^2.1.0",
     "node-fetch": "^3.3.0",
     "openai": "^4.70.0",
+    "playwright": "^1.58.1",
     "sharp": "^0.34.5",
     "telegraf": "^4.16.0",
+    "js-yaml": "^4.1.0",
     "zod": "^3.23.0"
   },
   "prisma": {
@@ -43,6 +48,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@types/js-yaml": "^4.0.9",
     "prisma": "^6.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",

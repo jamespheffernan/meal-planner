@@ -222,25 +222,53 @@ async function searchOpenFoodFacts(ingredientName: string): Promise<OffLookupRes
   try {
     const query = encodeURIComponent(ingredientName)
     const response = await fetch(
-      `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${query}&search_simple=1&action=process&json=1&page_size=5&fields=product_name,nutriments,image_url,image_front_url,image_front_small_url`,
+      `https://world.openfoodfacts.org/cgi/search.pl?search_terms=${query}&search_simple=1&action=process&json=1&page_size=8&fields=product_name,generic_name,nutriments,image_url,image_front_url,image_front_small_url`,
       { headers: { 'User-Agent': 'MealPlanner/1.0' } }
     )
 
     if (!response.ok) return null
 
-    const data = await response.json()
+    const data: any = await response.json()
     if (!data.products?.length) return null
 
-    const product = data.products[0]
-    const n = product.nutriments || {}
+    const normalizedQuery = ingredientName.toLowerCase()
+    const ranked = data.products
+      .map((product: any) => {
+        const n = product.nutriments || {}
+        const calories = n['energy-kcal_100g'] || n['energy-kcal']
+        const protein = n.proteins_100g || n.proteins
+        const carbs = n.carbohydrates_100g || n.carbohydrates
+        const fat = n.fat_100g || n.fat
+        const imageUrl = product.image_front_url || product.image_url || product.image_front_small_url
+        const nameText = `${product.product_name || ''} ${product.generic_name || ''}`.toLowerCase()
+        const nameMatch = nameText.includes(normalizedQuery)
+        const hasCalories = Boolean(calories)
+        const score = (nameMatch ? 5 : 0) + (hasCalories ? 4 : 0) + (imageUrl ? 1 : 0)
+        return {
+          score,
+          productName: product.product_name,
+          calories,
+          protein,
+          carbs,
+          fat,
+          imageUrl,
+        }
+      })
+      .sort((a: any, b: any) => b.score - a.score)
+
+    const withCalories = ranked.find((item: any) => item.calories !== undefined)
+    const withImage = ranked.find((item: any) => item.imageUrl)
+    const best = withCalories || withImage || ranked[0]
+
+    if (!best?.calories && !best?.imageUrl) return null
 
     return {
-      productName: product.product_name,
-      calories: n['energy-kcal_100g'] || n['energy-kcal'],
-      protein: n.proteins_100g || n.proteins,
-      carbs: n.carbohydrates_100g || n.carbohydrates,
-      fat: n.fat_100g || n.fat,
-      imageUrl: product.image_front_url || product.image_url || product.image_front_small_url,
+      productName: best.productName,
+      calories: best.calories,
+      protein: best.protein,
+      carbs: best.carbs,
+      fat: best.fat,
+      imageUrl: best.imageUrl,
     }
   } catch (error) {
     console.error(`Open Food Facts error for ${ingredientName}:`, error)

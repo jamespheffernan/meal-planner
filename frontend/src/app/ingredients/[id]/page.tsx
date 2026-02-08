@@ -126,7 +126,7 @@ export default function IngredientDetailPage() {
         <h2 className="text-lg font-semibold text-gray-900 mb-3">Used In Recipes</h2>
         {ingredient.recipeIngredients && ingredient.recipeIngredients.length > 0 ? (
           <div className="space-y-2">
-            {ingredient.recipeIngredients.map((ri: any) => (
+            {ingredient.recipeIngredients.map((ri) => (
               <div key={ri.id} className="flex items-center justify-between bg-gray-50 px-3 py-2 rounded">
                 <div>
                   <p className="text-sm font-medium text-gray-900">{ri.recipe?.name}</p>

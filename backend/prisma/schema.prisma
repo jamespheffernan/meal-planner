@@ -88,6 +88,14 @@ enum CookingRating {
   neutral
 }
 
+enum CandidateStatus {
+  pending
+  approved
+  rejected
+  imported
+  error
+}
+
 enum DayOfWeek {
   monday
   tuesday
@@ -96,6 +104,40 @@ enum DayOfWeek {
   friday
   saturday
   sunday
+}
+
+// Store / Agent enums
+
+enum StoreProvider {
+  ocado
+}
+
+enum PurchaseOrderStatus {
+  pending
+  approved
+  placed
+  delivered
+  cancelled
+}
+
+enum PurchaseOrderSource {
+  manual
+  from_shopping_list
+  from_receipt_import
+}
+
+enum StapleSource {
+  user_confirmed
+  auto_detected
+  imported
+}
+
+enum ProductPreferenceStatus {
+  unknown
+  trying
+  liked
+  staple
+  disliked
 }
 
 // Core Tables
@@ -126,6 +168,7 @@ model Recipe {
   recipeInstructions RecipeInstruction[]
   cookingHistory    CookingHistory[]
   mealPlans         MealPlan[]
+  recipeCandidates  RecipeCandidate[]
 
   @@map("recipes")
 }
@@ -144,6 +187,11 @@ model Ingredient {
   recipeIngredients RecipeIngredient[]
   pantryInventory   PantryInventory[]
   shoppingListItems ShoppingListItem[]
+  ingredientStoreMappings IngredientStoreMapping[]
+  shoppingListStoreOverrides ShoppingListIngredientStoreOverride[]
+  purchaseOrderItems PurchaseOrderItem[]
+  stapleRules        StapleRule[]
+  storeProductPreferences StoreProductPreference[]
 
   @@map("ingredients")
 }
@@ -188,6 +236,58 @@ model RecipeInstruction {
   recipe Recipe @relation(fields: [recipeId], references: [id], onDelete: Cascade)
 
   @@map("recipe_instructions")
+}
+
+model RecipeDiscoveryBatch {
+  id             String   @id @default(uuid())
+  query          String
+  mealType       MealType?
+  maxTimeMinutes Int?     @map("max_time_minutes")
+  sources        String[]
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  candidates RecipeCandidate[]
+
+  @@map("recipe_discovery_batches")
+}
+
+model RecipeCandidate {
+  id               String          @id @default(uuid())
+  batchId          String          @map("batch_id")
+  sourceUrl        String          @unique @map("source_url")
+  sourceName       String          @map("source_name")
+  name             String
+  description      String?
+  imageUrl         String?         @map("image_url")
+  servings         Int?
+  cookTimeMinutes  Int?            @map("cook_time_minutes")
+  prepTimeMinutes  Int?            @map("prep_time_minutes")
+  totalTimeMinutes Int?            @map("total_time_minutes")
+  ingredients      String[]
+  instructions     String[]
+  status           CandidateStatus @default(pending)
+  recipeId         String?         @map("recipe_id")
+  errorMessage     String?         @map("error_message")
+  createdAt        DateTime        @default(now()) @map("created_at")
+
+  batch  RecipeDiscoveryBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  recipe Recipe?              @relation(fields: [recipeId], references: [id])
+
+  @@map("recipe_candidates")
+}
+
+model DiscoverySource {
+  id          String   @id @default(uuid())
+  host        String   @unique
+  displayName String?  @map("display_name")
+  enabled     Boolean  @default(true)
+  sitemapUrls String[] @map("sitemap_urls")
+  rssUrls     String[] @map("rss_urls")
+  weight      Int      @default(1)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("discovery_sources")
 }
 
 model CookingHistory {
@@ -254,6 +354,8 @@ model ShoppingList {
   createdAt          DateTime           @default(now()) @map("created_at")
 
   items ShoppingListItem[]
+  storeOverrides ShoppingListIngredientStoreOverride[]
+  purchaseOrders PurchaseOrder[]
 
   @@map("shopping_lists")
 }
@@ -317,4 +419,184 @@ model AppSecret {
   updatedAt      DateTime @updatedAt @map("updated_at")
 
   @@map("app_secrets")
+}
+
+// === Store Integrations / Ordering ===
+
+model StoreIntegration {
+  id                String        @id @default(uuid())
+  provider          StoreProvider @unique
+  displayName       String?       @map("display_name")
+  enabled           Boolean       @default(true)
+  defaultForOrdering Boolean      @default(false) @map("default_for_ordering")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  @@map("store_integrations")
+}
+
+model StoreProduct {
+  id                String        @id @default(uuid())
+  provider          StoreProvider
+  providerProductId String        @map("provider_product_id")
+  name              String
+  brandName         String?       @map("brand_name")
+  sizeText          String?       @map("size_text")
+  imageUrl          String?       @map("image_url")
+  productUrl        String?       @map("product_url")
+  lastSeenPrice     Decimal?      @map("last_seen_price") @db.Decimal(10, 2)
+  currency          String?       @default("GBP")
+  lastSeenAt        DateTime?     @map("last_seen_at")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+
+  ingredientMappings IngredientStoreMapping[]
+  shoppingListOverrides ShoppingListIngredientStoreOverride[]
+  orderItems         PurchaseOrderItem[]
+  preferences        StoreProductPreference[]
+  stapleRules        StapleRule[]
+
+  @@unique([provider, providerProductId])
+  @@map("store_products")
+}
+
+model IngredientStoreMapping {
+  id              String      @id @default(uuid())
+  ingredientId    String      @map("ingredient_id")
+  storeProductId  String      @map("store_product_id")
+  isDefault       Boolean     @default(true) @map("is_default")
+  confidence      Decimal     @default(1.0) @db.Decimal(3, 2)
+  lastConfirmedAt DateTime?   @map("last_confirmed_at")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  ingredient   Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  storeProduct StoreProduct @relation(fields: [storeProductId], references: [id], onDelete: Cascade)
+
+  @@unique([ingredientId, storeProductId])
+  @@map("ingredient_store_mappings")
+}
+
+// Per-shopping-list overrides: select a product for this list without changing the global default mapping.
+model ShoppingListIngredientStoreOverride {
+  id             String        @id @default(uuid())
+  shoppingListId String        @map("shopping_list_id")
+  ingredientId   String        @map("ingredient_id")
+  provider       StoreProvider
+  storeProductId String        @map("store_product_id")
+  lastConfirmedAt DateTime?    @map("last_confirmed_at")
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  shoppingList ShoppingList @relation(fields: [shoppingListId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient   @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+  storeProduct StoreProduct @relation(fields: [storeProductId], references: [id], onDelete: Cascade)
+
+  @@unique([shoppingListId, ingredientId, provider])
+  @@map("shopping_list_ingredient_store_overrides")
+}
+
+// === Purchase history (for budget + staples) ===
+
+model PurchaseOrder {
+  id            String             @id @default(uuid())
+  provider      StoreProvider
+  // Timestamp semantics:
+  // - createdAt: when we recorded the order object (snapshot/workflow)
+  // - approvedAt: when checkout dry-run / slot selection completed
+  // - placedAt: when user confirmed placement (or automation placed a real order)
+  // - deliveredAt: when delivery was confirmed (manual or import)
+  // - cancelledAt: when cancelled (terminal)
+  approvedAt    DateTime?          @map("approved_at")
+  placedAt      DateTime?          @map("placed_at")
+  deliveredAt   DateTime?          @map("delivered_at")
+  cancelledAt   DateTime?          @map("cancelled_at")
+  total         Decimal            @db.Decimal(10, 2)
+  currency      String             @default("GBP")
+  status        PurchaseOrderStatus @default(pending)
+  source        PurchaseOrderSource @default(manual)
+  shoppingListId String?           @map("shopping_list_id")
+  deliverySlot  String?            @map("delivery_slot")
+  checkoutUrl   String?            @map("checkout_url")
+  notes         String?
+  createdAt     DateTime           @default(now()) @map("created_at")
+  updatedAt     DateTime           @updatedAt @map("updated_at")
+
+  shoppingList ShoppingList? @relation(fields: [shoppingListId], references: [id], onDelete: SetNull)
+  items        PurchaseOrderItem[]
+
+  @@map("purchase_orders")
+}
+
+model PurchaseOrderItem {
+  id             String   @id @default(uuid())
+  purchaseOrderId String  @map("purchase_order_id")
+  ingredientId   String?  @map("ingredient_id")
+  storeProductId String?  @map("store_product_id")
+  rawName        String   @map("raw_name")
+  quantity       Int      @default(1)
+  unit           String?
+  price          Decimal  @db.Decimal(10, 2)
+  lineTotal      Decimal? @map("line_total") @db.Decimal(10, 2)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  ingredient    Ingredient?   @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+  storeProduct  StoreProduct? @relation(fields: [storeProductId], references: [id], onDelete: SetNull)
+
+  @@map("purchase_order_items")
+}
+
+// === Staples and preferences ===
+
+model StapleRule {
+  id              String       @id @default(uuid())
+  ingredientId    String?      @map("ingredient_id")
+  storeProductId  String?      @map("store_product_id")
+  normalizedName  String?      @map("normalized_name")
+  reorderAfterDays Int         @default(7) @map("reorder_after_days")
+  enabled         Boolean      @default(false)
+  confidence      Decimal      @default(0.5) @db.Decimal(3, 2)
+  source          StapleSource @default(auto_detected)
+  lastPurchasedAt DateTime?    @map("last_purchased_at")
+  lastSuggestedAt DateTime?    @map("last_suggested_at")
+  createdAt       DateTime     @default(now()) @map("created_at")
+  updatedAt       DateTime     @updatedAt @map("updated_at")
+
+  ingredient   Ingredient?   @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+  storeProduct StoreProduct? @relation(fields: [storeProductId], references: [id], onDelete: SetNull)
+
+  @@map("staple_rules")
+}
+
+model StoreProductPreference {
+  id             String                  @id @default(uuid())
+  storeProductId String?                 @map("store_product_id")
+  ingredientId   String?                 @map("ingredient_id")
+  normalizedName String                  @map("normalized_name")
+  status         ProductPreferenceStatus @default(unknown)
+  typicalPrice   Decimal?                @map("typical_price") @db.Decimal(10, 2)
+  notes          String?
+  lastPurchasedAt DateTime?              @map("last_purchased_at")
+  purchaseCount  Int                     @default(0) @map("purchase_count")
+  createdAt      DateTime                @default(now()) @map("created_at")
+  updatedAt      DateTime                @updatedAt @map("updated_at")
+
+  storeProduct StoreProduct? @relation(fields: [storeProductId], references: [id], onDelete: SetNull)
+  ingredient   Ingredient?   @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+
+  @@map("store_product_preferences")
+}
+
+// Minimal assistant session persistence (for Telegram chat + web)
+model AssistantSession {
+  id         String   @id @default(uuid())
+  channel    String   // 'telegram' | 'web'
+  externalId String   @map("external_id") // telegram chat id or web session id
+  state      Json?    // conversation state/tool results summaries
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@unique([channel, externalId])
+  @@map("assistant_sessions")
 }
