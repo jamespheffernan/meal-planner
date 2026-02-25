@@ -2,11 +2,13 @@ databases:
   - name: meal-planner-db
     databaseName: meal_planner
     user: meal_planner
+    plan: free
 
 services:
   - type: web
     name: meal-planner-backend
     runtime: node
+    plan: free
     rootDir: backend
     buildCommand: npm ci && npm run db:generate && npm run build
     startCommand: npm run start:prod
@@ -28,6 +30,7 @@ services:
   - type: web
     name: meal-planner-frontend
     runtime: node
+    plan: free
     rootDir: frontend
     buildCommand: npm ci && npm run build
     startCommand: npm run start
@@ -36,5 +39,5 @@ services:
         value: 20
       - key: NEXT_TELEMETRY_DISABLED
         value: "1"
-      - key: BACKEND_URL
-        value: http://meal-planner-backend:10000
+      - key: NEXT_PUBLIC_API_URL
+        sync: false

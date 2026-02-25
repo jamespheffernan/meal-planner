@@ -935,7 +935,9 @@ This repo now includes `/render.yaml` so you can deploy the full stack without r
 4. Set backend environment variables before first deploy:
    - `MEAL_PLANNER_ENCRYPTION_KEY` (required for Settings secret/session storage)
    - `OPENAI_API_KEY` (optional; enables OCR/image features)
-5. Deploy.
+5. Set frontend environment variable before deploy:
+   - `NEXT_PUBLIC_API_URL` = `https://<your-backend-service>.onrender.com/api`
+6. Deploy.
 
 Generate a valid encryption key locally:
 ```bash
@@ -944,7 +946,8 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 Notes:
 - Backend startup runs `prisma db push` automatically (`npm run start:prod`) so schema stays in sync.
-- Frontend uses `/api/*` rewrites and proxies to `BACKEND_URL` (set to `http://meal-planner-backend:10000` in `render.yaml`).
+- `render.yaml` is configured to use free plans by default.
+- Render free services have cold starts and free Postgres is not for long-term production use.
 - For non-Render hosting, set `NEXT_PUBLIC_API_URL` to your backend URL (for example `https://api.yourdomain.com/api`).
 
 ## License
