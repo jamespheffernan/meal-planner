@@ -922,36 +922,30 @@ OFF_ENRICH_DELAY_MS=200
 
 ## Deployment
 
-### Backend
+### Recommended: Render Blueprint (Frontend + Backend + Postgres)
 
+This repo now includes `/render.yaml` so you can deploy the full stack without running local dev servers.
+
+1. Push this repo to GitHub.
+2. In Render, create a new **Blueprint** and select this repo.
+3. Render will create:
+   - `meal-planner-db` (Postgres)
+   - `meal-planner-backend` (Fastify API)
+   - `meal-planner-frontend` (Next.js app)
+4. Set backend environment variables before first deploy:
+   - `MEAL_PLANNER_ENCRYPTION_KEY` (required for Settings secret/session storage)
+   - `OPENAI_API_KEY` (optional; enables OCR/image features)
+5. Deploy.
+
+Generate a valid encryption key locally:
 ```bash
-cd backend
-npm run build
-npm start
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
 
-Requires:
-- PostgreSQL database
-- MEAL_PLANNER_ENCRYPTION_KEY for secret storage
-- (Optional) OPENAI_API_KEY for OCR/image features
-- PORT and HOST env vars
-
-### Frontend
-
-```bash
-cd frontend
-npm run build
-npm start
-```
-
-Or build and deploy static site:
-```bash
-npm run build
-# Output in `.next/`
-```
-
-Requires:
-- NEXT_PUBLIC_API_URL pointing to backend
+Notes:
+- Backend startup runs `prisma db push` automatically (`npm run start:prod`) so schema stays in sync.
+- Frontend uses `/api/*` rewrites and proxies to `BACKEND_URL` (set to `http://meal-planner-backend:10000` in `render.yaml`).
+- For non-Render hosting, set `NEXT_PUBLIC_API_URL` to your backend URL (for example `https://api.yourdomain.com/api`).
 
 ## License
 

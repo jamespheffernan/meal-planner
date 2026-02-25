@@ -6,6 +6,7 @@ import { parseIngredientString } from '../services/ingredient-parser.js'
 import { canonicalizeUnit } from '../services/units.js'
 import { parsePaprikaExport, deduplicateRecipes, type ImportedRecipe } from '../services/paprika-import.js'
 import { getRecipeAuthCookie } from '../services/recipe-auth.js'
+import { isProbablyUrl, normalizeRecipeName, recipeContentSignature } from '../services/recipe-dedupe.js'
 
 interface UrlImportBody {
   url: string
@@ -106,6 +107,29 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
       }
 
       const scraped = await scrapeRecipeFromUrl(url, authCookie ? { cookie: authCookie } : undefined)
+
+      // Prevent duplicates for the common case: importing the same URL again.
+      if (isProbablyUrl(scraped.source)) {
+        const existing = await fastify.prisma.recipe.findFirst({
+          where: { source: scraped.source!.trim() },
+          include: {
+            recipeIngredients: { include: { ingredient: true } },
+            recipeInstructions: true,
+          },
+        })
+        if (existing) {
+          return {
+            success: true,
+            recipe: existing,
+            scraped,
+            deduped: true,
+            auth: {
+              used: Boolean(authCookie),
+              source: authCookie ? (cookie ? 'request' : 'stored') : 'none',
+            },
+          }
+        }
+      }
 
       // Create recipe in database
       const recipe = await createRecipeFromScraped(fastify, scraped, autoApprove)
@@ -423,18 +447,44 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
 
       // Get existing recipe names for deduplication
       const existingRecipes = await fastify.prisma.recipe.findMany({
-        select: { name: true },
+        select: {
+          id: true,
+          name: true,
+          recipeIngredients: { select: { ingredient: { select: { name: true } } } },
+          recipeInstructions: { select: { stepNumber: true, instructionText: true }, orderBy: { stepNumber: 'asc' } },
+        },
       })
       const existingNames = existingRecipes.map(r => r.name)
+      const existingByNameSig = new Map<string, Set<string>>() // normalizedName -> set(signature)
+      for (const r of existingRecipes) {
+        const n = normalizeRecipeName(r.name)
+        if (!n) continue
+        const sig = recipeContentSignature({
+          name: r.name,
+          ingredients: r.recipeIngredients.map(ri => ri.ingredient.name),
+          instructions: r.recipeInstructions.map(i => i.instructionText),
+        })
+        const set = existingByNameSig.get(n) || new Set<string>()
+        set.add(sig)
+        existingByNameSig.set(n, set)
+      }
 
       const { unique, duplicates } = deduplicateRecipes(imported, existingNames)
 
       // Create recipes
       const created = []
       const errors = []
+      const contentDuplicates: string[] = []
 
       for (const recipe of unique) {
         try {
+          // Conservative extra guard: same normalized name + same ingredient/instruction signature.
+          const n = normalizeRecipeName(recipe.name)
+          const sig = recipeContentSignature({ name: recipe.name, ingredients: recipe.ingredients, instructions: recipe.instructions })
+          if (n && existingByNameSig.get(n)?.has(sig)) {
+            contentDuplicates.push(recipe.name)
+            continue
+          }
           const created_recipe = await createRecipeFromImported(fastify, recipe, autoApprove)
           created.push(created_recipe)
         } catch (error) {
@@ -445,9 +495,9 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
       return {
         success: true,
         imported: created.length,
-        duplicatesSkipped: duplicates.length,
+        duplicatesSkipped: duplicates.length + contentDuplicates.length,
         errors: errors.length > 0 ? errors : undefined,
-        duplicateNames: duplicates.map(d => d.name),
+        duplicateNames: [...duplicates.map(d => d.name), ...contentDuplicates],
       }
     } catch (error) {
       return reply.badRequest(`Failed to parse Paprika export: ${error}`)

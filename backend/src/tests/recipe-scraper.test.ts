@@ -5,7 +5,7 @@ const mockFetch = vi.fn()
 global.fetch = mockFetch
 
 // Import after mocking
-const { scrapeRecipeFromUrl } = await import('../services/recipe-scraper.js')
+const { scrapeRecipeFromUrl, isProbablyRecipe } = await import('../services/recipe-scraper.js')
 
 describe('Recipe Scraper', () => {
   beforeEach(() => {
@@ -181,5 +181,11 @@ describe('Recipe Scraper', () => {
 
     expect(result.cookTimeMinutes).toBe(90) // 1h30m = 90 minutes
     expect(result.prepTimeMinutes).toBe(45)
+  })
+
+  it('should flag non-recipe-like scrapes', () => {
+    expect(isProbablyRecipe({ name: 'Some Article', ingredients: [], instructions: [] })).toBe(false)
+    expect(isProbablyRecipe({ name: 'Untitled Recipe', ingredients: ['x', 'y'], instructions: ['step'] })).toBe(false)
+    expect(isProbablyRecipe({ name: 'Actual Recipe', ingredients: ['a', 'b'], instructions: ['do it'] })).toBe(true)
   })
 })

@@ -1,13 +1,14 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { shoppingLists, mealPlans, orders } from '@/lib/api'
+import { shoppingLists, mealPlans, orders, pantry } from '@/lib/api'
 import { format, addDays, startOfWeek } from 'date-fns'
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import { ShoppingCart, Check, RefreshCw, Package } from 'lucide-react'
 import clsx from 'clsx'
 import type { ShoppingList, ShoppingListItem, PreparedOrder, AddToCartResult, OrderReviewResult } from '@/lib/api'
 import { formatIngredientQuantity } from '@/lib/units'
+import { useSearchParams } from 'next/navigation'
 
 function errorMessage(e: unknown): string {
   if (e instanceof Error) return e.message
@@ -22,8 +23,18 @@ function errorMessage(e: unknown): string {
 }
 
 export default function ShoppingPage() {
+  return (
+    <Suspense fallback={<p className="text-gray-500">Loading...</p>}>
+      <ShoppingPageInner />
+    </Suspense>
+  )
+}
+
+function ShoppingPageInner() {
   const queryClient = useQueryClient()
-  const [activeListId, setActiveListId] = useState<string | null>(null)
+  const searchParams = useSearchParams()
+  const initialListId = searchParams.get('listId')
+  const [activeListId, setActiveListId] = useState<string | null>(initialListId)
 
   const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 })
   const weekEnd = addDays(weekStart, 6)
@@ -85,10 +96,17 @@ export default function ShoppingPage() {
                 )}
               >
                 <div className="flex justify-between items-center">
-                  <span className="font-medium">{format(new Date(list.createdDate), 'MMM d, yyyy')}</span>
+                  <span
+                    className={clsx(
+                      'font-medium',
+                      activeList?.id === list.id ? 'text-white' : 'text-gray-900'
+                    )}
+                  >
+                    {format(new Date(list.createdDate), 'MMM d, yyyy')}
+                  </span>
                   <StatusBadge status={list.status} />
                 </div>
-                <p className={clsx('text-sm', activeList?.id === list.id ? 'text-gray-300' : 'text-gray-500')}>
+                <p className={clsx('text-sm', activeList?.id === list.id ? 'text-gray-200' : 'text-gray-500')}>
                   {list.items.length} items
                   {list.totalEstimatedCost && ` · £${Number(list.totalEstimatedCost).toFixed(2)}`}
                 </p>
@@ -146,6 +164,27 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
       shoppingLists.updateItem(list.id, itemId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shoppingLists'] })
+    },
+  })
+
+  const haveItMutation = useMutation({
+    mutationFn: async (item: ShoppingListItem) => {
+      // 1) Remove from list by marking "have"
+      await shoppingLists.updateItem(list.id, item.id, { userOverride: 'have' })
+      // 2) Add to pantry (best-effort; does not block removal)
+      try {
+        await pantry.create({
+          ingredientId: item.ingredientId,
+          quantity: Number(item.quantity) || 1,
+          unit: item.unit || 'piece',
+        })
+      } catch {
+        // Ignore pantry failures; user intent is primarily to remove from list.
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shoppingLists'] })
+      queryClient.invalidateQueries({ queryKey: ['pantry'] })
     },
   })
 
@@ -280,7 +319,10 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
   })
 
   // Group items by category
-  const groupedItems = list.items.reduce((acc, item) => {
+  const groupedItems = list.items
+    // Hide "have it" items entirely (user asked for removal)
+    .filter(item => item.userOverride !== 'have')
+    .reduce((acc, item) => {
     const category = item.ingredient.category
     if (!acc[category]) acc[category] = []
     acc[category].push(item)
@@ -299,7 +341,7 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
     <div className="bg-white rounded-lg shadow">
       <div className="p-4 border-b border-gray-200 flex justify-between items-center">
         <div>
-          <h2 className="text-lg font-semibold">
+          <h2 className="text-lg font-semibold text-gray-950">
             {format(new Date(list.createdDate), 'MMMM d, yyyy')}
           </h2>
           <p className="text-sm text-gray-500">
@@ -343,7 +385,7 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
                     className={clsx(
                       'flex items-center gap-3 p-2 rounded-lg',
                       item.purchased ? 'bg-green-50' :
-                      !isNeeded ? 'bg-gray-50 opacity-60' : 'bg-white'
+                      !isNeeded ? 'bg-gray-50' : 'bg-white'
                     )}
                   >
                     <button
@@ -360,7 +402,12 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
                     </button>
 
                     <div className="flex-1">
-                      <p className={clsx('font-medium', item.purchased && 'line-through text-gray-500')}>
+                      <p
+                        className={clsx(
+                          'font-medium',
+                          item.purchased ? 'line-through text-gray-500' : (!isNeeded ? 'text-gray-700' : 'text-gray-900')
+                        )}
+                      >
                         {item.ingredient.name}
                       </p>
                       <p className="text-sm text-gray-500">
@@ -371,32 +418,12 @@ function ShoppingListView({ list }: { list: ShoppingList }) {
 
                     <div className="flex gap-1">
                       <button
-                        onClick={() => updateItemMutation.mutate({
-                          itemId: item.id,
-                          data: { userOverride: item.userOverride === 'have' ? null : 'have' }
-                        })}
-                        className={clsx(
-                          'px-2 py-1 text-xs rounded transition-colors',
-                          item.userOverride === 'have' || (item.assumedHave && !item.userOverride)
-                            ? 'bg-blue-100 text-blue-700'
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        )}
+                        onClick={() => haveItMutation.mutate(item)}
+                        disabled={haveItMutation.isPending}
+                        className="px-2 py-1 text-xs rounded transition-colors bg-blue-100 text-blue-800 hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Remove from list and add to pantry"
                       >
-                        Have
-                      </button>
-                      <button
-                        onClick={() => updateItemMutation.mutate({
-                          itemId: item.id,
-                          data: { userOverride: item.userOverride === 'need' ? null : 'need' }
-                        })}
-                        className={clsx(
-                          'px-2 py-1 text-xs rounded transition-colors',
-                          item.userOverride === 'need' || (!item.assumedHave && !item.userOverride)
-                            ? 'bg-orange-100 text-orange-700'
-                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                        )}
-                      >
-                        Need
+                        Have it
                       </button>
                     </div>
                   </div>

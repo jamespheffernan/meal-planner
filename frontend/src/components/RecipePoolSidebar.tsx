@@ -8,18 +8,62 @@ import RecipePhoto from './RecipePhoto'
 interface RecipePoolSidebarProps {
   recipes: Recipe[]
   onAddRecipe: (recipe: Recipe) => void
+  onPreviewRecipe?: (recipe: Recipe) => void
 }
 
-export function RecipePoolSidebar({ recipes, onAddRecipe }: RecipePoolSidebarProps) {
+function normalizeName(name: string): string {
+  return (name || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function pickBestRecipe(a: Recipe, b: Recipe): Recipe {
+  const aScore =
+    (a.approvalStatus === 'approved' ? 1000 : 0) +
+    (a.timesCooked || 0) * 10 +
+    (a.photoUrl ? 5 : 0) +
+    (a.description && a.description.trim() ? 2 : 0)
+  const bScore =
+    (b.approvalStatus === 'approved' ? 1000 : 0) +
+    (b.timesCooked || 0) * 10 +
+    (b.photoUrl ? 5 : 0) +
+    (b.description && b.description.trim() ? 2 : 0)
+  if (aScore !== bScore) return aScore > bScore ? a : b
+  // Stable tie-breaker so React keys don't churn.
+  return a.id < b.id ? a : b
+}
+
+function dedupeByName(recipes: Recipe[]): Recipe[] {
+  const byKey = new Map<string, Recipe>()
+  for (const r of recipes) {
+    const key = `${r.mealType}:${normalizeName(r.name)}`
+    const existing = byKey.get(key)
+    if (!existing) {
+      byKey.set(key, r)
+      continue
+    }
+    byKey.set(key, pickBestRecipe(existing, r))
+  }
+  return Array.from(byKey.values())
+}
+
+export function RecipePoolSidebar({ recipes, onAddRecipe, onPreviewRecipe }: RecipePoolSidebarProps) {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     new Set(['breakfast', 'lunch', 'dinner'])
   )
   
+  // UI-level dedupe: users generally expect "same name" to appear once in the pool.
+  const uniqueRecipes = dedupeByName(recipes)
+
   // Lunch and dinner recipes are interchangeable
-  const lunchAndDinnerRecipes = recipes.filter(r => r.mealType === 'lunch' || r.mealType === 'dinner')
+  const lunchAndDinnerRecipes = uniqueRecipes.filter(r => r.mealType === 'lunch' || r.mealType === 'dinner')
   
   const recipesByType = {
-    breakfast: recipes.filter(r => r.mealType === 'breakfast'),
+    breakfast: uniqueRecipes.filter(r => r.mealType === 'breakfast'),
     lunch: lunchAndDinnerRecipes,
     dinner: lunchAndDinnerRecipes,
   }
@@ -37,11 +81,11 @@ export function RecipePoolSidebar({ recipes, onAddRecipe }: RecipePoolSidebarPro
   }
   
   return (
-    <div className="bg-white rounded-lg shadow h-full overflow-hidden flex flex-col">
+    <div className="bg-white h-full overflow-hidden flex flex-col">
       <div className="p-4 border-b border-gray-200">
         <h2 className="text-lg font-semibold text-gray-900">Recipe Pool</h2>
         <p className="text-sm text-gray-500 mt-1">
-          {recipes.length} approved recipes
+          {uniqueRecipes.length} approved recipes
         </p>
       </div>
       
@@ -52,6 +96,7 @@ export function RecipePoolSidebar({ recipes, onAddRecipe }: RecipePoolSidebarPro
           isExpanded={expandedSections.has('breakfast')}
           onToggle={() => toggleSection('breakfast')}
           onAddRecipe={onAddRecipe}
+          onPreviewRecipe={onPreviewRecipe}
           color="orange"
         />
         
@@ -61,6 +106,7 @@ export function RecipePoolSidebar({ recipes, onAddRecipe }: RecipePoolSidebarPro
           isExpanded={expandedSections.has('lunch')}
           onToggle={() => toggleSection('lunch')}
           onAddRecipe={onAddRecipe}
+          onPreviewRecipe={onPreviewRecipe}
           color="green"
         />
         
@@ -70,6 +116,7 @@ export function RecipePoolSidebar({ recipes, onAddRecipe }: RecipePoolSidebarPro
           isExpanded={expandedSections.has('dinner')}
           onToggle={() => toggleSection('dinner')}
           onAddRecipe={onAddRecipe}
+          onPreviewRecipe={onPreviewRecipe}
           color="blue"
         />
       </div>
@@ -83,10 +130,11 @@ interface RecipeSectionProps {
   isExpanded: boolean
   onToggle: () => void
   onAddRecipe: (recipe: Recipe) => void
+  onPreviewRecipe?: (recipe: Recipe) => void
   color: 'orange' | 'green' | 'blue'
 }
 
-function RecipeSection({ title, recipes, isExpanded, onToggle, onAddRecipe, color }: RecipeSectionProps) {
+function RecipeSection({ title, recipes, isExpanded, onToggle, onAddRecipe, onPreviewRecipe, color }: RecipeSectionProps) {
   const colorClasses = {
     orange: 'bg-orange-50 text-orange-700 border-orange-200',
     green: 'bg-green-50 text-green-700 border-green-200',
@@ -124,6 +172,7 @@ function RecipeSection({ title, recipes, isExpanded, onToggle, onAddRecipe, colo
                 key={recipe.id}
                 recipe={recipe}
                 onAdd={() => onAddRecipe(recipe)}
+                onPreview={() => onPreviewRecipe?.(recipe)}
               />
             ))
           )}
@@ -136,30 +185,38 @@ function RecipeSection({ title, recipes, isExpanded, onToggle, onAddRecipe, colo
 interface RecipeCardProps {
   recipe: Recipe
   onAdd: () => void
+  onPreview?: () => void
 }
 
-function RecipeCard({ recipe, onAdd }: RecipeCardProps) {
+function RecipeCard({ recipe, onAdd, onPreview }: RecipeCardProps) {
   return (
     <div className="group flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 transition-all hover:scale-[1.02] hover:shadow-sm">
-      <RecipePhoto
-        recipeId={recipe.id}
-        photoUrl={recipe.photoUrl}
-        recipeName={recipe.name}
-        size="xs"
-        editable={false}
-      />
-      
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900 truncate">
-          {recipe.name}
-        </p>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
-          <Clock className="w-3 h-3" />
-          <span>{recipe.cookTimeMinutes} min</span>
-          <span>·</span>
-          <span>{recipe.servings} servings</span>
+      <button
+        type="button"
+        onClick={onPreview}
+        className="flex items-center gap-2 flex-1 min-w-0 text-left"
+        title="Preview recipe"
+      >
+        <RecipePhoto
+          recipeId={recipe.id}
+          photoUrl={recipe.photoUrl}
+          recipeName={recipe.name}
+          size="xs"
+          editable={false}
+        />
+
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-900 truncate">
+            {recipe.name}
+          </p>
+          <div className="flex items-center gap-2 text-xs text-gray-500">
+            <Clock className="w-3 h-3" />
+            <span>{recipe.cookTimeMinutes} min</span>
+            <span>·</span>
+            <span>{recipe.servings} servings</span>
+          </div>
         </div>
-      </div>
+      </button>
       
       <button
         onClick={onAdd}

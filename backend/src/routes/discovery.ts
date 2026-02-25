@@ -1,10 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { MealType, CandidateStatus } from '@prisma/client'
-import { scrapeRecipeFromUrl } from '../services/recipe-scraper.js'
+import { scrapeRecipeFromUrl, isProbablyRecipe } from '../services/recipe-scraper.js'
 import { normalizeIngredientName } from '../services/ingredient-normalizer.js'
 import { parseIngredientString } from '../services/ingredient-parser.js'
 import { getRecipeAuthCookie } from '../services/recipe-auth.js'
 import { getDiscoverySources, saveDiscoverySources } from '../services/discovery-sources.js'
+import { isProbablyUrl } from '../services/recipe-dedupe.js'
 
 type DiscoverySourceConfig = {
   host: string
@@ -163,6 +164,10 @@ export default async function discoveryRoutes(fastify: FastifyInstance) {
         const normalizedHost = host ? host.replace(/^www\./, '') : null
         const authCookie = host ? await getRecipeAuthCookie(fastify.prisma, host) : null
         const scraped = await scrapeRecipeFromUrl(url, authCookie ? { cookie: authCookie } : undefined)
+        // Guardrail: skip sitemap/RSS URLs that aren't actually recipes.
+        if (!isProbablyRecipe(scraped)) {
+          return
+        }
         const totalTime = scraped.totalTimeMinutes ||
           ((scraped.cookTimeMinutes || 0) + (scraped.prepTimeMinutes || 0)) ||
           undefined
@@ -478,6 +483,18 @@ async function createRecipeFromCandidate(
   },
   mealType: MealType
 ) {
+  // Avoid importing the same candidate URL multiple times.
+  if (isProbablyUrl(candidate.sourceUrl)) {
+    const existing = await fastify.prisma.recipe.findFirst({
+      where: { source: candidate.sourceUrl.trim() },
+      include: {
+        recipeIngredients: { include: { ingredient: true } },
+        recipeInstructions: true,
+      },
+    })
+    if (existing) return existing
+  }
+
   const ingredientRecords = []
   for (const ingStr of candidate.ingredients) {
     const normalizedName = normalizeIngredientName(ingStr)

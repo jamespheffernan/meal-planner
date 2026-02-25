@@ -13,6 +13,28 @@ interface ScrapedRecipe {
   source: string
 }
 
+/**
+ * Heuristic guardrail: some non-recipe pages (news/articles) share markup or list-heavy layouts
+ * and can be falsely interpreted as recipes. For discovery we should only accept candidates that
+ * look like actual recipes.
+ */
+export function isProbablyRecipe(scraped: Pick<ScrapedRecipe, 'ingredients' | 'instructions' | 'name'>): boolean {
+  const name = (scraped.name || '').trim()
+  const ingredients = (scraped.ingredients || []).filter(Boolean)
+  const instructions = (scraped.instructions || []).filter(Boolean)
+
+  // Must have a real title plus some structured content.
+  if (!name || name.toLowerCase() === 'untitled recipe') return false
+
+  // Articles often scrape with 0 ingredients; allow a small minimum to reduce noise.
+  if (ingredients.length < 2) return false
+
+  // Some sites have instructions in a single paragraph; still require at least one step.
+  if (instructions.length < 1) return false
+
+  return true
+}
+
 interface ScrapeOptions {
   cookie?: string
   extraHeaders?: Record<string, string>

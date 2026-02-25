@@ -1,24 +1,29 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { mealPlans, recipes } from '@/lib/api'
+import { mealPlans, recipes, shoppingLists } from '@/lib/api'
 import { format, addDays, startOfWeek, isSameDay } from 'date-fns'
 import { useState } from 'react'
-import { Check, X, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
+import { Check, X, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react'
 import type { Recipe, MealPlan } from '@/lib/api'
 import { MealProgressTracker } from '@/components/MealProgressTracker'
 import { RecipePoolSidebar } from '@/components/RecipePoolSidebar'
 import { ServingPickerModal } from '@/components/ServingPickerModal'
 import { StagedMealsList, type StagedMeal } from '@/components/StagedMealsList'
 import { CompletionCelebration } from '@/components/CompletionCelebration'
+import { RecipePreviewModal } from '@/components/RecipePreviewModal'
+import { useRouter } from 'next/navigation'
 
 const MEAL_TYPES = ['breakfast', 'lunch', 'dinner'] as const
 
 export default function MealPlanPage() {
   const queryClient = useQueryClient()
+  const router = useRouter()
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }))
   const [stagedMeals, setStagedMeals] = useState<StagedMeal[]>([])
+  const [sidebarTab, setSidebarTab] = useState<'pool' | 'staged'>('pool')
   const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null)
+  const [previewRecipe, setPreviewRecipe] = useState<Recipe | null>(null)
   const [draggedStagedMeal, setDraggedStagedMeal] = useState<StagedMeal | null>(null)
   const [draggedMealPlan, setDraggedMealPlan] = useState<MealPlan | null>(null)
   const [dragOverSlot, setDragOverSlot] = useState<string | null>(null)
@@ -32,6 +37,17 @@ export default function MealPlanPage() {
       fromDate: format(weekStart, 'yyyy-MM-dd'),
       toDate: format(weekEnd, 'yyyy-MM-dd'),
     }),
+  })
+
+  const generateShoppingListMutation = useMutation({
+    mutationFn: async () => {
+      const ids = (weekMealPlans || []).filter(mp => mp.status === 'planned').map(mp => mp.id)
+      return shoppingLists.generate(ids)
+    },
+    onSuccess: (newList) => {
+      queryClient.invalidateQueries({ queryKey: ['shoppingLists'] })
+      router.push(`/shopping?listId=${encodeURIComponent(newList.id)}`)
+    },
   })
 
   const { data: approvedRecipes } = useQuery({
@@ -125,6 +141,10 @@ export default function MealPlanPage() {
 
   const handleAddRecipe = (recipe: Recipe) => {
     setSelectedRecipe(recipe)
+  }
+
+  const handlePreviewRecipe = (recipe: Recipe) => {
+    setPreviewRecipe(recipe)
   }
 
   const handleConfirmServings = (servings: number) => {
@@ -351,6 +371,15 @@ export default function MealPlanPage() {
         <h1 className="text-2xl font-bold text-gray-900">Meal Plan</h1>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => generateShoppingListMutation.mutate()}
+            disabled={generateShoppingListMutation.isPending || !(weekMealPlans || []).some(mp => mp.status === 'planned')}
+            className="flex items-center gap-2 px-3 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Create a grocery list from planned meals this week"
+          >
+            <RefreshCw className={`w-4 h-4 ${generateShoppingListMutation.isPending ? 'animate-spin' : ''}`} />
+            Grocery list
+          </button>
+          <button
             onClick={() => setWeekStart(d => addDays(d, -7))}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
           >
@@ -369,17 +398,65 @@ export default function MealPlanPage() {
       </div>
 
       {/* Three-column layout */}
-      <div className="flex-1 grid grid-cols-12 gap-6 overflow-hidden">
-        {/* Left: Recipe Pool */}
-        <div className="col-span-3 overflow-hidden">
-          <RecipePoolSidebar
-            recipes={approvedRecipes || []}
-            onAddRecipe={handleAddRecipe}
-          />
+      <div className="flex-1 grid grid-cols-12 gap-4 overflow-hidden">
+        {/* Left: Sidebar Tabs (Pool / Staged) */}
+        <div className="col-span-3 overflow-hidden flex flex-col">
+          <div className="bg-white rounded-lg shadow overflow-hidden flex flex-col h-full">
+            <div className="p-2 border-b border-gray-200">
+              <div className="grid grid-cols-2 bg-gray-100 rounded-lg p-1">
+                <button
+                  type="button"
+                  onClick={() => setSidebarTab('pool')}
+                  className={`px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                    sidebarTab === 'pool'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Recipe Pool
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSidebarTab('staged')}
+                  className={`px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+                    sidebarTab === 'staged'
+                      ? 'bg-white text-gray-900 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900'
+                  }`}
+                >
+                  Planned ({stagedMeals.length})
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-hidden">
+              {sidebarTab === 'pool' ? (
+                <div className="h-full">
+                  <RecipePoolSidebar
+                    recipes={approvedRecipes || []}
+                    onAddRecipe={handleAddRecipe}
+                    onPreviewRecipe={handlePreviewRecipe}
+                  />
+                </div>
+              ) : (
+                <div className="h-full">
+                  <StagedMealsList
+                    stagedMeals={stagedMeals}
+                    onUpdateServings={handleUpdateServings}
+                    onRemove={handleRemoveStagedMeal}
+                    onAutoAssign={handleAutoAssign}
+                    isAssigning={bulkAssignMutation.isPending}
+                    onDragStart={handleDragStartStagedMeal}
+                    onDragEnd={handleDragEnd}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* Center: Main content area */}
-        <div className="col-span-6 flex flex-col gap-6 overflow-hidden">
+        <div className="col-span-9 flex flex-col gap-4 overflow-hidden">
           {/* Progress Tracker */}
           <MealProgressTracker progress={progress} />
 
@@ -390,82 +467,74 @@ export default function MealPlanPage() {
             </div>
           ) : (
             <div className="bg-white rounded-lg shadow overflow-auto flex-1">
-              <table className="w-full">
-                <thead className="sticky top-0 bg-white border-b border-gray-200 z-10">
-                  <tr>
-                    <th className="p-3 text-left text-sm font-medium text-gray-500 w-24"></th>
-                    {weekDays.map(day => (
-                      <th key={day.toISOString()} className="p-3 text-center text-sm font-medium text-gray-900">
-                        <div>{format(day, 'EEE')}</div>
-                        <div className="text-gray-500 font-normal">{format(day, 'MMM d')}</div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {MEAL_TYPES.map(mealType => (
-                    <tr key={mealType} className="border-b border-gray-100">
-                      <td className="p-3 text-sm font-medium text-gray-500 capitalize">{mealType}</td>
-                      {weekDays.map(day => {
-                        const meal = getMealForSlot(day, mealType)
-                        const slotKey = `${format(day, 'yyyy-MM-dd')}-${mealType}`
-                        const isDragOver = dragOverSlot === slotKey
-                        
-                        return (
-                          <td 
-                            key={day.toISOString()} 
-                            className="p-2"
-                            onDragOver={(e) => {
-                              e.preventDefault()
-                              setDragOverSlot(slotKey)
-                            }}
-                            onDragLeave={() => setDragOverSlot(null)}
-                            onDrop={(e) => {
-                              e.preventDefault()
-                              handleDropOnSlot(day, mealType)
-                              setDragOverSlot(null)
-                            }}
-                          >
-                            {meal ? (
-                              <MealCard
-                                meal={meal}
-                                onMarkCooked={() => markCookedMutation.mutate({ id: meal.id })}
-                                onDelete={() => handleDeleteMeal(meal)}
-                                onDragStart={() => handleDragStartMealPlan(meal)}
-                                onDragEnd={handleDragEnd}
-                                isDragOver={isDragOver && (draggedStagedMeal !== null || draggedMealPlan !== null)}
-                              />
-                            ) : (
-                              <div className={`w-full h-20 border-2 border-dashed rounded-lg flex items-center justify-center transition-colors ${
-                                isDragOver && (draggedStagedMeal || draggedMealPlan)
-                                  ? 'border-blue-400 bg-blue-50 text-blue-600' 
-                                  : 'border-gray-200 text-gray-400'
-                              }`}>
-                                <Plus className="w-5 h-5" />
-                              </div>
-                            )}
-                          </td>
-                        )
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="min-w-[720px]">
+                <div className="grid grid-cols-[140px_1fr] sticky top-0 bg-white z-10 border-b border-gray-200">
+                  <div className="p-3 text-xs font-medium text-gray-500">Day</div>
+                  <div className="grid grid-cols-3 gap-3 p-3 text-xs font-medium text-gray-500">
+                    <div>Breakfast</div>
+                    <div>Lunch</div>
+                    <div>Dinner</div>
+                  </div>
+                </div>
+
+                {weekDays.map((day) => {
+                  const dayStr = format(day, 'yyyy-MM-dd')
+                  return (
+                    <div key={dayStr} className="grid grid-cols-[140px_1fr] border-b border-gray-100">
+                      <div className="p-3">
+                        <div className="text-sm font-semibold text-gray-900">{format(day, 'EEE')}</div>
+                        <div className="text-xs text-gray-500">{format(day, 'MMM d')}</div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3 p-3">
+                        {MEAL_TYPES.map((mealType) => {
+                          const meal = getMealForSlot(day, mealType)
+                          const slotKey = `${dayStr}-${mealType}`
+                          const isDragOver = dragOverSlot === slotKey
+
+                          return (
+                            <div
+                              key={slotKey}
+                              className="min-w-0"
+                              onDragOver={(e) => {
+                                e.preventDefault()
+                                setDragOverSlot(slotKey)
+                              }}
+                              onDragLeave={() => setDragOverSlot(null)}
+                              onDrop={(e) => {
+                                e.preventDefault()
+                                handleDropOnSlot(day, mealType)
+                                setDragOverSlot(null)
+                              }}
+                            >
+                              {meal ? (
+                                <MealCard
+                                  meal={meal}
+                                  onMarkCooked={() => markCookedMutation.mutate({ id: meal.id })}
+                                  onDelete={() => handleDeleteMeal(meal)}
+                                  onDragStart={() => handleDragStartMealPlan(meal)}
+                                  onDragEnd={handleDragEnd}
+                                  isDragOver={isDragOver && (draggedStagedMeal !== null || draggedMealPlan !== null)}
+                                />
+                              ) : (
+                                <div className={`w-full h-16 border-2 border-dashed rounded-lg flex items-center justify-center transition-colors ${
+                                  isDragOver && (draggedStagedMeal || draggedMealPlan)
+                                    ? 'border-blue-400 bg-blue-50 text-blue-600'
+                                    : 'border-gray-200 text-gray-400'
+                                }`}>
+                                  <Plus className="w-5 h-5" />
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
-        </div>
-
-        {/* Right: Staged Meals */}
-        <div className="col-span-3 overflow-hidden">
-          <StagedMealsList
-            stagedMeals={stagedMeals}
-            onUpdateServings={handleUpdateServings}
-            onRemove={handleRemoveStagedMeal}
-            onAutoAssign={handleAutoAssign}
-            isAssigning={bulkAssignMutation.isPending}
-            onDragStart={handleDragStartStagedMeal}
-            onDragEnd={handleDragEnd}
-          />
         </div>
       </div>
 
@@ -475,6 +544,19 @@ export default function MealPlanPage() {
           recipe={selectedRecipe}
           onConfirm={handleConfirmServings}
           onClose={() => setSelectedRecipe(null)}
+        />
+      )}
+
+      {/* Recipe Preview Modal */}
+      {previewRecipe && (
+        <RecipePreviewModal
+          recipeId={previewRecipe.id}
+          initialRecipe={previewRecipe}
+          onClose={() => setPreviewRecipe(null)}
+          onAdd={(r) => {
+            setPreviewRecipe(null)
+            handleAddRecipe(r)
+          }}
         />
       )}
 
