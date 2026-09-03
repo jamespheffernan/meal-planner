@@ -34,7 +34,7 @@
     "adm-zip": "^0.5.16",
     "cheerio": "^1.0.0",
     "date-fns": "^4.1.0",
-    "fastify": "^5.0.0",
+    "fastify": "^5.12.1",
     "fastify-plugin": "^5.0.0",
     "heic-convert": "^2.1.0",
     "node-fetch": "^3.3.0",
