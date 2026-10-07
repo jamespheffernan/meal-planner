@@ -1,0 +1,4 @@
+CREATE TABLE "pi_meal_documents" ("id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "revision" INTEGER NOT NULL DEFAULT 1, "data" JSONB NOT NULL, "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updated_at" TIMESTAMP(3) NOT NULL);
+CREATE INDEX "pi_meal_documents_kind_updated_at_idx" ON "pi_meal_documents"("kind", "updated_at");
+CREATE TABLE "pi_meal_operations" ("id" TEXT PRIMARY KEY, "document_id" TEXT NOT NULL, "actor_id" TEXT NOT NULL, "payload_hash" TEXT NOT NULL, "result" JSONB NOT NULL, "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE "pi_meal_outbox" ("id" TEXT PRIMARY KEY, "document_id" TEXT NOT NULL, "actor_id" TEXT NOT NULL, "payload" JSONB NOT NULL, "status" TEXT NOT NULL DEFAULT 'pending', "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updated_at" TIMESTAMP(3) NOT NULL);
