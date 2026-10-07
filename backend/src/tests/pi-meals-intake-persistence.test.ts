@@ -1,0 +1,55 @@
+import {describe,it,expect,vi} from 'vitest'
+import type {PrismaClient} from '@prisma/client'
+import {createDraft,patchDraft,saveDraft,fetchRecipePage} from '../pi-meals/intake.js'
+function memoryStore(){
+ const documents=new Map<string,any>();const operations=new Map<string,any>();const recipes=new Map<string,any>();const ingredientRows=new Map<string,any>()
+ const client:any={
+  piMealDocument:{findUnique:vi.fn(async({where}:any)=>documents.get(where.id)??null),create:vi.fn(async({data}:any)=>{documents.set(data.id,data);return data}),updateMany:vi.fn(async({where,data}:any)=>{const row=documents.get(where.id);if(!row||row.revision!==where.revision)return {count:0};documents.set(row.id,{...row,...data});return {count:1}})},
+  piMealOperation:{findUnique:vi.fn(async({where}:any)=>operations.get(where.id)??null),create:vi.fn(async({data}:any)=>{if(operations.has(data.id))throw Error('duplicate');operations.set(data.id,data);return data})},
+  ingredient:{upsert:vi.fn(async({where,create}:any)=>{const row=ingredientRows.get(where.name)??{id:where.name,...create};ingredientRows.set(where.name,row);return row})},
+  recipe:{create:vi.fn(async({data}:any)=>{if(recipes.has(data.id))throw Error('duplicate recipe');recipes.set(data.id,data);return data})},
+ }
+ client.$transaction=async(fn:any)=>fn(client)
+ return {prisma:client as PrismaClient,client,documents,recipes}
+}
+const recipe='Soup\nServes 2\nIngredients\n200 g tomatoes\n1 onion\nMethod\nChop and simmer.'
+describe('persisted recipe intake',()=>{
+ it('preserves corrections when URL is reimported and rejects command reuse',async()=>{
+  const store=memoryStore();const draft=await createDraft(store.prisma,'actor',{operationId:'create',url:'https://example.com/soup',text:recipe})
+  const changed=await patchDraft(store.prisma,'actor',draft.id,{operationId:'patch',expectedRevision:1,draft:{name:'Corrected soup'}})
+  const retry=await createDraft(store.prisma,'actor',{operationId:'retry',url:'https://example.com/soup?utm_source=x',text:'wrong text'})
+  expect(retry.name).toBe('Corrected soup');expect(retry.revision).toBe(changed.revision)
+  await expect(createDraft(store.prisma,'actor',{operationId:'retry',url:'https://example.com/soup',text:'another change'})).rejects.toThrow('command ID')
+ })
+ it('explicit save creates ingredients, steps and one canonical recipe across retries',async()=>{
+  const store=memoryStore();const draft=await createDraft(store.prisma,'actor',{operationId:'create',text:recipe})
+  const saved=await saveDraft(store.prisma,'actor',draft.id,{operationId:'save',expectedRevision:1})
+  expect(saved.status).toBe('saved');expect(saved.recipeId).toBeTruthy()
+  expect(store.recipes.get(saved.recipeId!)?.recipeIngredients.create).toHaveLength(2)
+  expect(await saveDraft(store.prisma,'actor',draft.id,{operationId:'save',expectedRevision:1})).toEqual(saved)
+  expect((await saveDraft(store.prisma,'actor',draft.id,{operationId:'save-again',expectedRevision:1})).recipeId).toBe(saved.recipeId)
+  expect(store.client.recipe.create).toHaveBeenCalledTimes(1)
+ })
+ it('incomplete amounts remain persisted but cannot create a canonical recipe',async()=>{
+  const store=memoryStore();const draft=await createDraft(store.prisma,'actor',{operationId:'create',text:'Soup\nServes 2\nIngredients\ntomatoes\nMethod\nSimmer.'})
+  expect(store.documents.has(draft.id)).toBe(true)
+  await expect(saveDraft(store.prisma,'actor',draft.id,{operationId:'save',expectedRevision:1})).rejects.toThrow('Quantity needed')
+  expect(store.client.recipe.create).not.toHaveBeenCalled()
+ })
+ it('creates an actionable draft for NYT without network or cookie access',async()=>{
+  const store=memoryStore();const draft=await createDraft(store.prisma,'actor',{operationId:'create',url:'https://cooking.nytimes.com/recipes/123'})
+  expect(draft.gaps.join(' ')).toContain('authorised Aside');expect(draft.status).toBe('draft')
+ })
+ it('fills an untouched handoff draft when authorised text arrives without overwriting later corrections',async()=>{
+  const store=memoryStore();const url='https://cooking.nytimes.com/recipes/123'
+  const empty=await createDraft(store.prisma,'actor',{operationId:'empty',url})
+  const filled=await createDraft(store.prisma,'actor',{operationId:'fill',url,text:recipe})
+  expect(filled.id).toBe(empty.id);expect(filled.status).toBe('ready');expect(filled.revision).toBe(2)
+  const retry=await createDraft(store.prisma,'actor',{operationId:'fill',url,text:recipe})
+  expect(retry).toEqual(filled)
+ })
+ it('rejects private network and non-HTTPS fetches',async()=>{
+  await expect(fetchRecipePage('https://127.0.0.1/recipe')).rejects.toThrow('private')
+  await expect(fetchRecipePage('http://example.com/recipe')).rejects.toThrow('HTTPS')
+ })
+})
