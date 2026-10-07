@@ -4,7 +4,10 @@ import Link from "next/link";
 import {
   ArrowRight,
   Check,
-  ChefHat,
+  BookOpen,
+  Link2,
+  Search,
+  ChevronRight,
   Plus,
   ShoppingBasket,
   X,
@@ -22,6 +25,7 @@ import {
   type AssistantResult,
 } from "@/lib/pi-meals-api";
 import styles from "./workspace.module.css";
+import { formatQuantity } from "@/lib/pi-meals-format";
 import { ProductPicker } from "./product-picker";
 import { ShoppingCycle } from "./shopping-cycle";
 import { ManualExtras } from "./manual-extras";
@@ -29,6 +33,13 @@ import { saveCachedShopping } from "@/lib/pi-meals-shopping-api";
 
 export function MealsWorkspace() {
   const [libraryLimit, setLibraryLimit] = useState(12);
+  const [view, setView] = useState<"recipes" | "kitchen" | "shop">("recipes");
+  const [importOpen, setImportOpen] = useState(false);
+  const [selectionExpanded, setSelectionExpanded] = useState(false);
+  const [latestDraftId, setLatestDraftId] = useState<string | null>(null);
+  const [stockFilter, setStockFilter] = useState<"all" | "needed" | "covered">(
+    "all",
+  );
   const [selection, setSelection] = useState<RecipeSelection | null>(null),
     [saved, setSaved] = useState<RecipeSelection[]>([]),
     [library, setLibrary] = useState<Recipe[]>([]);
@@ -179,6 +190,22 @@ export function MealsWorkspace() {
       clearTimeout(timer);
     };
   }, [assistantRequestId, assistantActive, selectionId]);
+  function openView(next: "recipes" | "kitchen" | "shop") {
+    setView(next);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("shop-navigation")
+        ?.scrollIntoView({ block: "start" }),
+    );
+  }
+  function showImports() {
+    setImportOpen(true);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("recipe-intake")
+        ?.scrollIntoView({ block: "start" }),
+    );
+  }
   async function askAssistant() {
     if (!selection) return;
     const id = selection.id;
@@ -250,10 +277,12 @@ export function MealsWorkspace() {
         urls.length === 1 ? pageText || undefined : undefined,
       );
       setDrafts((prev) => [...prev.filter((d) => d.id !== result.id), result]);
+      setLatestDraftId(result.id);
     }
     if (!urls.length || (urls.length > 1 && pageText.trim())) {
       const result = await mealsApi.intake(undefined, pageText);
       setDrafts((prev) => [...prev.filter((d) => d.id !== result.id), result]);
+      setLatestDraftId(result.id);
     }
     setLinks("");
     setPageText("");
@@ -292,45 +321,141 @@ export function MealsWorkspace() {
     selection?.lines.filter(
       (line) => line.buyQuantity === null || line.buyQuantity > 0,
     ) || [];
+  const recipes =
+    selection?.items.filter(
+      (item) =>
+        item.recipeId || item.draftId || !item.id.startsWith("routine:"),
+    ) || [];
+  const extras =
+    selection?.items.filter(
+      (item) =>
+        !item.recipeId && !item.draftId && item.id.startsWith("routine:"),
+    ) || [];
+  const covered =
+    selection?.lines.filter((line) => line.buyQuantity === 0).length || 0;
+  const visibleLines =
+    selection?.lines.filter(
+      (line) =>
+        stockFilter === "all" ||
+        (stockFilter === "covered"
+          ? line.buyQuantity === 0
+          : line.buyQuantity !== 0),
+    ) || [];
   const selectionHandoff = selection
     ? `Shop for ${selection.title}. Selection ${selection.id}, revision ${selection.revision}.\n${need.map((line) => `${line.name}: ${line.buyQuantity ?? "quantity needs review"} ${line.unit}`).join("\n")}\nResolve product choices and pack sizes. Fill the Ocado basket, reconcile actual cart quantities, and return a receipt. Keep checkout manual.`
     : "";
   const handoff = basket ? serverHandoff : selectionHandoff;
   return (
     <div className={styles.workspace}>
-      <header className={styles.hero}>
+      <header className={styles.pageHeader}>
         <div>
-          <span className={styles.eyebrow}>
-            PI MEALS · THE RECIPE COMES FIRST
-          </span>
           <h1>
-            Good food.
-            <br />
-            One useful shop.
+            {login
+              ? "Your kitchen"
+              : selection?.title || "Opening your kitchen…"}
           </h1>
           <p>
-            Pick what you want to cook. Bring the ingredients together.
-            <br className={styles.desktop} /> Keep what you have, shop for what
-            you need.
+            {login
+              ? "Sign in to your shared recipes and shopping list."
+              : `${recipes.length} recipes · ${need.length} ingredients to shop · Saved as you go`}
           </p>
-          <div className={styles.heroLinks}>
-            <a href="#recipe-library" className={styles.primary}>
-              Shop these recipes <ArrowRight size={17} />
-            </a>
-            <Link href="/our-week" className={styles.secondary}>
-              Our week <ArrowRight size={17} />
-            </Link>
-          </div>
         </div>
-        <div className={styles.heroAside}>
-          <ChefHat size={36} />
-          <p>What sounds good?</p>
-          <span>
-            Your recipes, your servings,
-            <br />
-            your kitchen.
-          </span>
-        </div>
+        {!login && (
+          <details className={styles.manage}>
+            <summary>
+              Saved shops <ChevronRight size={15} />
+            </summary>
+            <div className={styles.manageContent}>
+              <label>
+                Open a saved shop
+                <select
+                  aria-label="Resume saved selection"
+                  disabled={busy}
+                  value={selection?.id || ""}
+                  onChange={(e) =>
+                    void run(async () => {
+                      setAssistant(null);
+                      setSelection(await mealsApi.selection(e.target.value));
+                      setBasket(null);
+                    })
+                  }
+                >
+                  {selection &&
+                    !saved.some((row) => row.id === selection.id) && (
+                      <option value={selection.id}>{selection.title}</option>
+                    )}
+                  {saved.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selection && (
+                <form
+                  className={styles.rename}
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const title = new FormData(e.currentTarget).get(
+                      "title",
+                    ) as string;
+                    void run(async () => {
+                      await change({ type: "rename", title });
+                      setSaved(await mealsApi.selections());
+                    });
+                  }}
+                >
+                  <label>
+                    Shop name
+                    <input
+                      disabled={busy}
+                      name="title"
+                      defaultValue={selection.title}
+                      key={selection.id + selection.title}
+                      required
+                      maxLength={120}
+                    />
+                  </label>
+                  <button disabled={busy}>Rename</button>
+                </form>
+              )}
+              <button
+                disabled={busy}
+                onClick={() =>
+                  void run(async () => {
+                    const created = await mealsApi.create();
+                    setAssistant(null);
+                    setSelection(created);
+                    setSaved(await mealsApi.selections());
+                    setBasket(null);
+                    openView("recipes");
+                  })
+                }
+              >
+                <Plus size={16} />
+                New shop
+              </button>
+              <div className={styles.account}>
+                <span>Signed in as {signedInName}</span>
+                <button
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => {
+                      await saveCachedShopping(null);
+                      await mealsApi.logout();
+                      setLogin(true);
+                      setSelection(null);
+                      setBasket(null);
+                      setDrafts([]);
+                    })
+                  }
+                >
+                  Sign out & clear offline list
+                </button>
+              </div>
+            </div>
+          </details>
+        )}
       </header>
       {error && (
         <div role="alert" className={styles.error}>
@@ -381,107 +506,41 @@ export function MealsWorkspace() {
         </form>
       ) : (
         <>
-          <div className={styles.toolbar}>
-            <span>Signed in as {signedInName}</span>
+          <nav
+            id="shop-navigation"
+            className={styles.views}
+            aria-label="Plan this shop"
+          >
             <button
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await saveCachedShopping(null);
-                  await mealsApi.logout();
-                  setLogin(true);
-                  setSelection(null);
-                  setBasket(null);
-                  setDrafts([]);
-                })
-              }
+              aria-pressed={view === "recipes"}
+              aria-controls="recipes-view"
+              onClick={() => openView("recipes")}
             >
-              Sign out and clear offline list
+              <BookOpen size={17} />
+              Recipes <span>{recipes.length}</span>
             </button>
-          </div>
-          <div className={styles.selectionBar}>
-            <div>
-              <span className={styles.eyebrow}>YOUR SAVED SELECTION</span>
-              <h2>{selection?.title || "Opening your kitchen…"}</h2>
-              <small>Recipes and kitchen stock save as you go.</small>
-            </div>
-            <div className={styles.toolbar}>
-              <select
-                aria-label="Resume saved selection"
-                disabled={busy}
-                value={selection?.id || ""}
-                onChange={(e) =>
-                  void run(async () => {
-                    setAssistant(null);
-                    setSelection(await mealsApi.selection(e.target.value));
-                    setBasket(null);
-                  })
-                }
-              >
-                {selection && !saved.some((row) => row.id === selection.id) && (
-                  <option value={selection.id}>{selection.title}</option>
-                )}
-                {saved.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.title}
-                  </option>
-                ))}
-              </select>
-              <button
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    const created = await mealsApi.create();
-                    setAssistant(null);
-                    setSelection(created);
-                    setSaved(await mealsApi.selections());
-                    setBasket(null);
-                  })
-                }
-              >
-                <Plus size={16} />
-                New selection
-              </button>
-            </div>
-          </div>
-          {selection && (
-            <form
-              className={styles.rename}
-              onSubmit={(e) => {
-                e.preventDefault();
-                const title = new FormData(e.currentTarget).get(
-                  "title",
-                ) as string;
-                void run(async () => {
-                  await change({ type: "rename", title });
-                  setSaved(await mealsApi.selections());
-                });
-              }}
+            <button
+              aria-pressed={view === "kitchen"}
+              aria-controls="kitchen-view"
+              onClick={() => openView("kitchen")}
             >
-              <input
-                disabled={busy}
-                aria-label="Selection name"
-                name="title"
-                defaultValue={selection.title}
-                key={selection.id + selection.title}
-                required
-                maxLength={120}
-              />
-              <button disabled={busy}>Save name</button>
-            </form>
-          )}
+              <Check size={17} />
+              Check the kitchen{" "}
+              <span>
+                {covered}/{selection?.lines.length || 0}
+              </span>
+            </button>
+            <button
+              aria-pressed={view === "shop"}
+              aria-controls="shop-view"
+              onClick={() => openView("shop")}
+            >
+              <ShoppingBasket size={17} />
+              Shop <span>{need.length}</span>
+            </button>
+          </nav>
           {selection && (
             <section className={styles.assistant}>
-              <div>
-                <span className={styles.eyebrow}>
-                  OPTIONAL KITCHEN ASSISTANT
-                </span>
-                <h3>Ask for a hand with this selection</h3>
-                <p>
-                  Try “we have 200g of rice” or “make the selected recipes serve
-                  four”. Your recipe and shopping controls stay here.
-                </p>
-              </div>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -490,12 +549,14 @@ export function MealsWorkspace() {
                 }}
               >
                 <label>
-                  Message
+                  <span className={styles.srOnly}>
+                    Ask the kitchen assistant
+                  </span>
                   <input
                     value={assistantInput}
                     maxLength={12000}
                     onChange={(e) => setAssistantInput(e.target.value)}
-                    placeholder="What would help with this shop?"
+                    placeholder="Try “we have 200g of rice” or “make these serve four”…"
                     required
                   />
                 </label>
@@ -508,7 +569,7 @@ export function MealsWorkspace() {
                       !pollEnded)
                   }
                 >
-                  Ask assistant
+                  Ask
                 </button>
               </form>
               {assistantStatus && !assistantStatus.available && (
@@ -548,336 +609,417 @@ export function MealsWorkspace() {
               )}
             </section>
           )}
-          <div className={styles.steps}>
-            <span className={styles.activeStep}>01 · Pick recipes</span>
-            <span>02 · Check the kitchen</span>
-            <span>03 · Build the basket</span>
-          </div>
-          {!!selection?.items.length && (
-            <section className={styles.panel}>
-              <div className={styles.sectionTitle}>
-                <h2>
-                  On the menu <small>{selection.items.length} recipes</small>
-                </h2>
-                <a href="#shopping-list">See combined ingredients ↓</a>
+
+          <div id="recipes-view" hidden={view !== "recipes"}>
+            <section
+              id="recipe-intake"
+              className={styles.intake}
+              hidden={!importOpen}
+            >
+              <div>
+                <div className={styles.sectionTitle}>
+                  <h2>Import recipes</h2>
+                  <button
+                    onClick={() => setImportOpen(false)}
+                    aria-label="Close recipe import"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+                <p>
+                  NYT Cooking, Instagram, or a recipe page open in Aside.
+                  Preview the ingredients before you save.
+                </p>
+                <Link href="/import">Other import tools ↗</Link>
               </div>
-              <div className={styles.cards}>
-                {selection.items.map((item) => (
-                  <article className={styles.card} key={item.id}>
-                    <RecipePhoto photo={item.photoUrl} name={item.name} />
-                    <div className={styles.cardBody}>
-                      <div className={styles.cardHeading}>
-                        <h3>{item.name}</h3>
-                        <button
-                          aria-label={`Remove ${item.name}`}
-                          disabled={busy}
-                          onClick={() =>
-                            void run(() =>
-                              change({
-                                type: "replace_items",
-                                items: selection.items.filter(
-                                  (row) => row.id !== item.id,
-                                ),
-                              }),
-                            )
-                          }
-                        >
-                          <X size={16} />
-                        </button>
-                      </div>
-                      {item.source && (
-                        <a
-                          href={safeSource(item.source)}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          Recipe source ↗
-                        </a>
-                      )}
-                      <label className={styles.servings}>
-                        Servings{" "}
-                        <input
-                          type="number"
-                          min="1"
-                          max="100"
-                          value={item.servings}
-                          disabled={busy}
-                          onChange={(e) => {
-                            const servings = Number(e.target.value);
-                            if (servings > 0)
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void run(preview);
+                }}
+              >
+                <label>
+                  Recipe links{" "}
+                  <textarea
+                    value={links}
+                    onChange={(e) => setLinks(e.target.value)}
+                    placeholder="Paste one link per line. Each becomes its own recipe."
+                    rows={3}
+                  />
+                </label>
+                <details className={styles.sourceText}>
+                  <summary>Paste recipe text from Aside or Instagram</summary>
+                  <label>
+                    Recipe text{" "}
+                    <textarea
+                      value={pageText}
+                      onChange={(e) => setPageText(e.target.value)}
+                      placeholder="Paste Aside page text, caption, transcript, or ingredient text…"
+                      rows={4}
+                    />
+                  </label>
+                </details>
+                <button className={styles.primary} disabled={busy}>
+                  {busy ? "Working…" : "Preview recipes"}{" "}
+                  <ArrowRight size={16} />
+                </button>
+              </form>
+              {drafts.length > 0 && (
+                <div className={styles.draftList}>
+                  <h3>Imported drafts · {drafts.length}</h3>
+                  {drafts.map((draft) => (
+                    <details
+                      key={draft.id}
+                      className={styles.draft}
+                      open={latestDraftId === draft.id}
+                      onToggle={(event) => {
+                        if (event.currentTarget.open)
+                          setLatestDraftId(draft.id);
+                        else if (latestDraftId === draft.id)
+                          setLatestDraftId(null);
+                      }}
+                    >
+                      <summary>{draft.name}</summary>
+                      <DraftEditor
+                        draft={draft}
+                        busy={busy}
+                        onChange={(value) =>
+                          setDrafts((rows) =>
+                            rows.map((row) =>
+                              row.id === value.id ? value : row,
+                            ),
+                          )
+                        }
+                        onSave={() => void run(() => saveDraft(draft))}
+                        onUse={() => void run(() => addDraftToShop(draft))}
+                      />
+                    </details>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <div className={styles.recipeWorkspace}>
+              <section id="recipe-library" className={styles.library}>
+                <div className={styles.sectionTitle}>
+                  <div>
+                    <h2>What looks good?</h2>
+                    <p>Choose from your recipes, or bring in a new one.</p>
+                  </div>
+                  <button
+                    aria-expanded={importOpen}
+                    aria-controls="recipe-intake"
+                    onClick={() =>
+                      importOpen ? setImportOpen(false) : showImports()
+                    }
+                  >
+                    <Link2 size={16} /> Import a recipe
+                  </button>
+                </div>
+                <div className={styles.searchBar}>
+                  <Search size={18} aria-hidden="true" />
+                  <input
+                    className={styles.search}
+                    placeholder="Find a recipe…"
+                    aria-label="Search recipe library"
+                    value={search}
+                    onChange={(e) => {
+                      setSearch(e.target.value);
+                      setLibraryLimit(12);
+                    }}
+                  />
+                </div>
+                <div className={styles.libraryMeta}>
+                  <span>
+                    {
+                      library.filter((recipe) =>
+                        recipe.name
+                          .toLowerCase()
+                          .includes(search.toLowerCase()),
+                      ).length
+                    }{" "}
+                    recipes
+                  </span>
+                  <Link href="/discover">
+                    Find something new <ArrowRight size={14} />
+                  </Link>
+                </div>
+                <div className={styles.cards}>
+                  {library
+                    .filter((recipe) =>
+                      recipe.name.toLowerCase().includes(search.toLowerCase()),
+                    )
+                    .slice(0, libraryLimit)
+                    .map((recipe) => (
+                      <article className={styles.card} key={recipe.id}>
+                        <RecipePhoto
+                          photo={recipe.photoUrl}
+                          name={recipe.name}
+                        />
+                        <div className={styles.cardBody}>
+                          <h3>{recipe.name}</h3>
+                          <p>
+                            {recipe.servings} servings ·{" "}
+                            {recipe.cookTimeMinutes} min
+                          </p>
+                          <button
+                            className={styles.addButton}
+                            disabled={
+                              busy ||
+                              !selection ||
+                              selection.items.some(
+                                (item) => item.recipeId === recipe.id,
+                              )
+                            }
+                            onClick={() => void run(() => add(recipe))}
+                          >
+                            {selection?.items.some(
+                              (item) => item.recipeId === recipe.id,
+                            ) ? (
+                              <>
+                                <Check size={16} />
+                                Selected
+                              </>
+                            ) : (
+                              <>
+                                <Plus size={16} />
+                                Add
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                </div>
+                {library.filter((recipe) =>
+                  recipe.name.toLowerCase().includes(search.toLowerCase()),
+                ).length > libraryLimit && (
+                  <button
+                    onClick={() => setLibraryLimit((count) => count + 12)}
+                  >
+                    Show more recipes
+                  </button>
+                )}
+                {!busy &&
+                  library.length > 0 &&
+                  !library.some((recipe) =>
+                    recipe.name.toLowerCase().includes(search.toLowerCase()),
+                  ) && (
+                    <p className={styles.empty}>
+                      No recipes match “{search}”. Try another name or import a
+                      recipe.
+                    </p>
+                  )}
+                {!busy && !library.length && (
+                  <p>
+                    Your library is ready for its first recipe. Import a link or{" "}
+                    <Link href="/recipes/new">write your own</Link>.
+                  </p>
+                )}
+              </section>
+
+              <aside className={styles.selectionRail}>
+                <div className={styles.sectionTitle}>
+                  <h2>This shop</h2>
+                  <span className={styles.desktopCount}>
+                    {recipes.length} recipes
+                  </span>
+                  <button
+                    className={styles.mobileSelectionToggle}
+                    aria-expanded={selectionExpanded}
+                    aria-controls="chosen-recipes"
+                    onClick={() => setSelectionExpanded(!selectionExpanded)}
+                  >
+                    {selectionExpanded
+                      ? "Hide meals"
+                      : `Show ${recipes.length} meals`}
+                    <ChevronRight size={15} />
+                  </button>
+                </div>
+                {!recipes.length && (
+                  <p className={styles.empty}>
+                    Pick a few meals you fancy. Their ingredients will come
+                    together in one list.
+                  </p>
+                )}
+                <button
+                  className={styles.primary}
+                  disabled={!selection?.lines.length}
+                  onClick={() => openView("kitchen")}
+                >
+                  Check the kitchen <ArrowRight size={16} />
+                </button>
+                <p className={styles.railHint}>
+                  {selection?.lines.length || 0} combined ingredients. Cross off
+                  what you have.
+                </p>
+                <div
+                  id="chosen-recipes"
+                  className={`${styles.selectionDetails} ${selectionExpanded ? styles.selectionExpanded : ""}`}
+                >
+                  <div className={styles.chosenRecipes}>
+                    {recipes.map((item) => (
+                      <article className={styles.chosenRecipe} key={item.id}>
+                        <div className={styles.chosenHeading}>
+                          {item.photoUrl && (
+                            <img
+                              className={styles.chosenPhoto}
+                              src={item.photoUrl}
+                              alt=""
+                              loading="lazy"
+                            />
+                          )}
+                          <div>
+                            <h3>{item.name}</h3>
+                            {item.source && (
+                              <a
+                                href={safeSource(item.source)}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                {sourceLabel(item.source)} ↗
+                              </a>
+                            )}
+                          </div>
+                          <button
+                            aria-label={`Remove ${item.name}`}
+                            disabled={busy}
+                            onClick={() =>
                               void run(() =>
                                 change({
                                   type: "replace_items",
-                                  items: selection.items.map((row) =>
-                                    row.id === item.id
-                                      ? { ...row, servings }
-                                      : row,
+                                  items: selection!.items.filter(
+                                    (row) => row.id !== item.id,
                                   ),
                                 }),
-                              );
-                          }}
-                        />
-                      </label>
-                      {item.recipeId && (
-                        <Link href={`/recipes/${item.recipeId}`}>
-                          Open recipe & cook →
-                        </Link>
-                      )}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
-          )}
-          <section id="recipe-library" className={styles.panel}>
-            <div className={styles.sectionTitle}>
-              <div>
-                <span className={styles.eyebrow}>
-                  START WITH SOMETHING YOU LOVE
-                </span>
-                <h2>Your recipe library</h2>
-              </div>
-              <div>
-                <Link href="/recipes">All recipes ↗</Link>
-                <a href="#recipe-intake">Import a recipe ↓</a>
-                <Link href="/discover">Discover something new ↗</Link>
-              </div>
-            </div>
-            <input
-              className={styles.search}
-              placeholder="Find a recipe…"
-              aria-label="Search recipe library"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setLibraryLimit(12);
-              }}
-            />
-            <div className={styles.cards}>
-              {library
-                .filter((recipe) =>
-                  recipe.name.toLowerCase().includes(search.toLowerCase()),
-                )
-                .slice(0, libraryLimit)
-                .map((recipe) => (
-                  <article className={styles.card} key={recipe.id}>
-                    <RecipePhoto photo={recipe.photoUrl} name={recipe.name} />
-                    <div className={styles.cardBody}>
-                      <h3>{recipe.name}</h3>
-                      <p>
-                        {recipe.servings} servings · {recipe.cookTimeMinutes}{" "}
-                        min
-                      </p>
-                      <button
-                        className={styles.addButton}
-                        disabled={
-                          busy ||
-                          !selection ||
-                          selection.items.some(
-                            (item) => item.recipeId === recipe.id,
-                          )
-                        }
-                        onClick={() => void run(() => add(recipe))}
-                      >
-                        {selection?.items.some(
-                          (item) => item.recipeId === recipe.id,
-                        ) ? (
-                          <>
-                            <Check size={16} />
-                            Selected
-                          </>
-                        ) : (
-                          <>
-                            <Plus size={16} />
-                            Add to this shop
-                          </>
-                        )}
-                      </button>
-                    </div>
-                  </article>
-                ))}
-            </div>
-            {library.filter((recipe) =>
-              recipe.name.toLowerCase().includes(search.toLowerCase()),
-            ).length > libraryLimit && (
-              <button onClick={() => setLibraryLimit((count) => count + 12)}>
-                Show more recipes
-              </button>
-            )}
-            {!busy && !library.length && (
-              <p>
-                Your library is ready for its first recipe. Add a link below or{" "}
-                <Link href="/recipes/new">write your own</Link>.
-              </p>
-            )}
-          </section>
-          <section id="recipe-intake" className={styles.intake}>
-            <div>
-              <span className={styles.eyebrow}>FOUND A RECIPE ELSEWHERE?</span>
-              <h2>Bring it into your kitchen.</h2>
-              <p>
-                NYT Cooking, Instagram, or a recipe page open in Aside. Preview
-                the ingredients before you save.
-              </p>
-              <Link href="/import">Other import tools ↗</Link>
-            </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void run(preview);
-              }}
-            >
-              <label>
-                Recipe links{" "}
-                <textarea
-                  value={links}
-                  onChange={(e) => setLinks(e.target.value)}
-                  placeholder="Paste one link per line. Each becomes its own recipe."
-                  rows={3}
-                />
-              </label>
-              <label>
-                Recipe page or Instagram evidence{" "}
-                <textarea
-                  value={pageText}
-                  onChange={(e) => setPageText(e.target.value)}
-                  placeholder="Paste Aside page text, caption, transcript, or ingredient text…"
-                  rows={4}
-                />
-              </label>
-              <button className={styles.primary} disabled={busy}>
-                {busy ? "Working…" : "Preview recipes"} <ArrowRight size={16} />
-              </button>
-            </form>
-          </section>
-          {drafts.map((draft) => (
-            <details key={draft.id} className={styles.panel}>
-              <summary>{draft.name} · imported recipe preview</summary>
-              <DraftEditor
-                draft={draft}
-                busy={busy}
-                onChange={(value) =>
-                  setDrafts((rows) =>
-                    rows.map((row) => (row.id === value.id ? value : row)),
-                  )
-                }
-                onSave={() => void run(() => saveDraft(draft))}
-                onUse={() => void run(() => addDraftToShop(draft))}
-              />
-            </details>
-          ))}
-          <section id="shopping-list" className={styles.panel}>
-            <div className={styles.sectionTitle}>
-              <div>
-                <span className={styles.eyebrow}>CHECK THE KITCHEN</span>
-                <h2>One ingredient list</h2>
-              </div>
-              <span>{need.length} ingredients to shop</span>
-            </div>
-            {!selection?.lines.length ? (
-              <p>Choose a recipe to see its ingredients here.</p>
-            ) : (
-              selection.lines.map((line) => (
-                <div className={styles.ingredient} key={line.id}>
-                  <div>
-                    <h3>{line.name}</h3>
-                    <p>
-                      Recipe total: {line.quantity ?? "Check quantity"}{" "}
-                      {line.unit} · Have: {line.haveQuantity} {line.unit}
-                    </p>
-                    <details>
-                      <summary>
-                        From {line.sources.length} recipe
-                        {line.sources.length === 1 ? "" : "s"}
-                      </summary>
-                      {line.sources.map((source) => (
-                        <p key={source.itemId}>
-                          {source.name}: {source.quantity ?? "unspecified"}{" "}
-                          {line.unit}
-                        </p>
-                      ))}
-                    </details>
-                    {line.warnings.map((warning) => (
-                      <p className={styles.warning} key={warning}>
-                        {warning}
-                      </p>
+                              )
+                            }
+                          >
+                            <X size={15} />
+                          </button>
+                        </div>
+                        <div className={styles.chosenFooter}>
+                          <label className={styles.servings}>
+                            Servings
+                            <input
+                              type="number"
+                              min="1"
+                              max="100"
+                              value={item.servings}
+                              disabled={busy}
+                              onChange={(e) => {
+                                const servings = Number(e.target.value);
+                                if (servings > 0)
+                                  void run(() =>
+                                    change({
+                                      type: "replace_items",
+                                      items: selection!.items.map((row) =>
+                                        row.id === item.id
+                                          ? { ...row, servings }
+                                          : row,
+                                      ),
+                                    }),
+                                  );
+                              }}
+                            />
+                          </label>
+                          {item.recipeId ? (
+                            <Link href={`/recipes/${item.recipeId}`}>
+                              Cook recipe <ArrowRight size={13} />
+                            </Link>
+                          ) : (
+                            <span>{item.ingredients.length} ingredients</span>
+                          )}
+                        </div>
+                      </article>
                     ))}
                   </div>
-                  <div className={styles.stock}>
-                    <strong>
-                      {line.buyQuantity === 0
-                        ? "Already have it"
-                        : `Buy ${line.buyQuantity ?? "—"} ${line.unit}`}
-                    </strong>
-                    <div>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void run(() =>
-                            change({ type: "have_all", lineId: line.id }),
-                          )
-                        }
-                      >
-                        {line.quantity === null ? "Have enough" : "Have all"}
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void run(() =>
-                            change({
-                              type: "set_stock",
-                              lineId: line.id,
-                              quantity: 0,
-                              unit: line.unit,
-                            }),
-                          )
-                        }
-                      >
-                        Reset
-                      </button>
-                    </div>
-                    <form
-                      hidden={line.quantity === null}
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        const quantity = Number(
-                          new FormData(e.currentTarget).get("quantity"),
-                        );
-                        void run(() =>
-                          change({
-                            type: "set_stock",
-                            lineId: line.id,
-                            quantity,
-                            unit: line.unit,
-                          }),
-                        );
-                      }}
-                    >
-                      <input
-                        aria-label={`Amount of ${line.name} already at home`}
-                        name="quantity"
-                        type="number"
-                        min="0"
-                        step="any"
-                        defaultValue={line.haveQuantity}
-                        key={line.haveQuantity}
-                      />
-                      <span>{line.unit}</span>
-                      <button disabled={busy}>Have amount</button>
-                    </form>
-                  </div>
+                  {extras.length > 0 && (
+                    <details>
+                      <summary>
+                        {extras.length} shopping extra
+                        {extras.length === 1 ? "" : "s"}
+                      </summary>
+                      {extras.map((item) => (
+                        <div className={styles.extra} key={item.id}>
+                          <span>{item.name}</span>
+                          <button
+                            disabled={busy}
+                            aria-label={`Remove ${item.name}`}
+                            onClick={() =>
+                              void run(() =>
+                                change({
+                                  type: "replace_items",
+                                  items: selection!.items.filter(
+                                    (row) => row.id !== item.id,
+                                  ),
+                                }),
+                              )
+                            }
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </details>
+                  )}
                 </div>
-              ))
-            )}
-          </section>
-          {selection && (
-            <>
-              <ManualExtras
-                selection={selection}
-                disabled={busy}
-                onChange={(c) => run(() => change(c))}
-              />
+                {drafts.length > 0 && (
+                  <button
+                    className={styles.textButton}
+                    onClick={() => {
+                      showImports();
+                    }}
+                  >
+                    Review {drafts.length} imported drafts
+                  </button>
+                )}
+              </aside>
+            </div>
+          </div>
+          <section
+            id="kitchen-view"
+            className={styles.kitchen}
+            hidden={view !== "kitchen"}
+          >
+            <div className={styles.sectionTitle}>
+              <div>
+                <h2>What do you already have?</h2>
+                <p>
+                  All your recipes, combined. Tick anything you have enough of.
+                </p>
+              </div>
+              <button
+                className={styles.primary}
+                disabled={!selection?.lines.length}
+                onClick={() => openView("shop")}
+              >
+                Shop {need.length} ingredients <ArrowRight size={16} />
+              </button>
+            </div>
+            <div className={styles.listTools}>
+              <div className={styles.filters} aria-label="Filter ingredients">
+                <button
+                  aria-pressed={stockFilter === "all"}
+                  onClick={() => setStockFilter("all")}
+                >
+                  All {selection?.lines.length || 0}
+                </button>
+                <button
+                  aria-pressed={stockFilter === "needed"}
+                  onClick={() => setStockFilter("needed")}
+                >
+                  To buy {need.length}
+                </button>
+                <button
+                  aria-pressed={stockFilter === "covered"}
+                  onClick={() => setStockFilter("covered")}
+                >
+                  Have it {covered}
+                </button>
+              </div>
               {undoStock &&
+                selection &&
                 undoStock.selectionId === selection.id &&
                 undoStock.revision === selection.revision && (
                   <button
@@ -892,153 +1034,298 @@ export function MealsWorkspace() {
                       })
                     }
                   >
-                    Undo last stock change
+                    Undo last change
                   </button>
                 )}
-              <ShoppingCycle selection={selection} />
-            </>
-          )}
-          <section className={styles.basket}>
-            <div>
-              <ShoppingBasket size={28} />
-              <h2>Ready for the shop?</h2>
-              <p>
-                Review product choices and pack sizes, then fill your Ocado
-                basket. Checkout stays in your hands.
-              </p>
-              <div className={styles.toolbar}>
-                <button
-                  className={styles.primary}
-                  disabled={busy || !selection || !need.length}
-                  onClick={() =>
-                    void run(async () => {
-                      if (selection)
-                        setBasket(await mealsApi.basket(selection.id, "ocado"));
-                    })
-                  }
-                >
-                  Prepare Ocado basket
-                </button>
-                <button
-                  disabled={busy || !selection || !need.length}
-                  onClick={() =>
-                    void run(async () => {
-                      if (selection)
-                        setBasket(await mealsApi.basket(selection.id, "aside"));
-                    })
-                  }
-                >
-                  Use Aside
-                </button>
-              </div>
             </div>
-            {basket && (
-              <div className={styles.basketReview}>
-                <h3>Basket: {basket.status.replace("_", " ")}</h3>
-                {basket.unresolved.map((reason, index) => (
-                  <p className={styles.warning} key={index}>
-                    {reason}
-                  </p>
+            {!selection?.lines.length ? (
+              <p className={styles.empty}>
+                Choose a recipe to see its ingredients here.
+              </p>
+            ) : !visibleLines.length ? (
+              <p className={styles.empty}>
+                {stockFilter === "covered"
+                  ? "Nothing ticked off yet."
+                  : "Everything on this list is covered."}
+              </p>
+            ) : (
+              <div className={styles.ingredientList}>
+                {visibleLines.map((line) => (
+                  <div
+                    className={`${styles.ingredient} ${line.buyQuantity === 0 ? styles.covered : ""}`}
+                    key={line.id}
+                  >
+                    <div className={styles.ingredientMain}>
+                      <button
+                        className={styles.haveButton}
+                        aria-label={`${line.buyQuantity === 0 ? "Put back on shopping list" : "Have enough"}: ${line.name}`}
+                        aria-pressed={line.buyQuantity === 0}
+                        disabled={busy}
+                        onClick={() =>
+                          void run(() =>
+                            change(
+                              line.buyQuantity === 0
+                                ? {
+                                    type: "set_stock",
+                                    lineId: line.id,
+                                    quantity: 0,
+                                    unit: line.unit,
+                                  }
+                                : { type: "have_all", lineId: line.id },
+                            ),
+                          )
+                        }
+                      >
+                        <Check size={17} />
+                      </button>
+                      <div>
+                        <h3>{line.name}</h3>
+                        <span>
+                          {formatQuantity(line.quantity, line.unit)} in your
+                          recipes
+                        </span>
+                      </div>
+                      <strong>
+                        {line.buyQuantity === 0
+                          ? "Have it"
+                          : line.buyQuantity === null
+                            ? "Check amount"
+                            : `Buy ${formatQuantity(line.buyQuantity, line.unit)}`}
+                      </strong>
+                    </div>
+                    <details className={styles.ingredientDetails}>
+                      <summary>
+                        {line.haveQuantity > 0 && line.buyQuantity !== 0
+                          ? `Have ${formatQuantity(line.haveQuantity, line.unit)} · change amount`
+                          : "Have some, or check recipes"}
+                      </summary>
+                      <div className={styles.ingredientDetailBody}>
+                        <div>
+                          {line.sources.map((source) => (
+                            <p key={source.itemId}>
+                              {source.name}:{" "}
+                              {formatQuantity(source.quantity, line.unit)}
+                            </p>
+                          ))}
+                          {line.quantity === null && (
+                            <p>
+                              Check the amount in the recipe, or tick this item
+                              if you have enough.
+                            </p>
+                          )}
+                        </div>
+                        {line.quantity !== null && (
+                          <form
+                            onSubmit={(e) => {
+                              e.preventDefault();
+                              const quantity = Number(
+                                new FormData(e.currentTarget).get("quantity"),
+                              );
+                              void run(() =>
+                                change({
+                                  type: "set_stock",
+                                  lineId: line.id,
+                                  quantity,
+                                  unit: line.unit,
+                                }),
+                              );
+                            }}
+                          >
+                            <label>
+                              Already have ({line.unit || "amount"})
+                              <input
+                                name="quantity"
+                                aria-label={`Amount of ${line.name} already at home`}
+                                type="number"
+                                min="0"
+                                step="any"
+                                defaultValue={line.haveQuantity}
+                                key={line.haveQuantity}
+                                disabled={busy}
+                                required
+                              />
+                            </label>
+                            <button disabled={busy}>Save amount</button>
+                          </form>
+                        )}
+                      </div>
+                    </details>
+                    {line.warnings.map((warning) => (
+                      <p className={styles.warning} key={warning}>
+                        {warning}
+                      </p>
+                    ))}
+                  </div>
                 ))}
-                <ProductPicker
-                  basket={basket}
-                  key={basket.id}
-                  onUpdated={(updated) =>
-                    setBasket((current) =>
-                      current?.id === updated.id &&
-                      current.revision <= updated.revision
-                        ? updated
-                        : current,
-                    )
-                  }
-                  disabled={busy}
-                />
+              </div>
+            )}
+          </section>
+          <div id="shop-view" hidden={view !== "shop"}>
+            <section className={styles.basket}>
+              <div>
+                <h2>Send the list to Ocado</h2>
+                <p>
+                  Let Aside help with the trolley, or choose products here. You
+                  review the basket before checkout.
+                </p>
                 <div className={styles.toolbar}>
                   <button
-                    disabled={
-                      busy ||
-                      basket.status !== "ready" ||
-                      basket.executor !== "ocado"
-                    }
+                    className={styles.primary}
+                    disabled={busy || !selection || !need.length}
                     onClick={() =>
                       void run(async () => {
                         if (selection)
                           setBasket(
-                            await mealsApi.fill(basket, selection.revision),
+                            await mealsApi.basket(selection.id, "aside"),
                           );
                       })
                     }
                   >
-                    Fill basket
+                    Shop with Aside <ArrowRight size={16} />
                   </button>
                   <button
-                    disabled={busy}
+                    disabled={busy || !selection || !need.length}
                     onClick={() =>
-                      void run(async () =>
-                        setBasket(await mealsApi.reconcile(basket)),
-                      )
+                      void run(async () => {
+                        if (selection)
+                          setBasket(
+                            await mealsApi.basket(selection.id, "ocado"),
+                          );
+                      })
                     }
                   >
-                    Check actual cart
+                    Choose Ocado products
                   </button>
                 </div>
-                <p>
-                  {basket.status === "complete"
-                    ? typeof basket.receipt === "object" &&
-                      basket.receipt !== null &&
-                      "verification" in basket.receipt &&
-                      basket.receipt.verification === "user"
-                      ? "You confirmed the trolley after reviewing it in Aside. Checkout stays manual."
-                      : "Cart quantities matched the reviewed products. Checkout stays manual."
-                    : "Cart additions are not yet verified. Review unresolved items and check the actual cart."}
-                </p>
-                {basket.receipt != null && (
-                  <details>
-                    <summary>Cart receipt</summary>
-                    <pre>{JSON.stringify(basket.receipt, null, 2)}</pre>
-                  </details>
+              </div>
+              {basket && (
+                <div className={styles.basketReview}>
+                  <h3>Basket: {basket.status.replace("_", " ")}</h3>
+                  {basket.unresolved.map((reason, index) => (
+                    <p className={styles.warning} key={index}>
+                      {reason}
+                    </p>
+                  ))}
+                  <ProductPicker
+                    basket={basket}
+                    key={basket.id}
+                    onUpdated={(updated) =>
+                      setBasket((current) =>
+                        current?.id === updated.id &&
+                        current.revision <= updated.revision
+                          ? updated
+                          : current,
+                      )
+                    }
+                    disabled={busy}
+                  />
+                  <div className={styles.toolbar}>
+                    <button
+                      disabled={
+                        busy ||
+                        basket.status !== "ready" ||
+                        basket.executor !== "ocado"
+                      }
+                      onClick={() =>
+                        void run(async () => {
+                          if (selection)
+                            setBasket(
+                              await mealsApi.fill(basket, selection.revision),
+                            );
+                        })
+                      }
+                    >
+                      Fill basket
+                    </button>
+                    <button
+                      disabled={busy}
+                      onClick={() =>
+                        void run(async () =>
+                          setBasket(await mealsApi.reconcile(basket)),
+                        )
+                      }
+                    >
+                      Check actual cart
+                    </button>
+                  </div>
+                  <p>
+                    {basket.status === "complete"
+                      ? typeof basket.receipt === "object" &&
+                        basket.receipt !== null &&
+                        "verification" in basket.receipt &&
+                        basket.receipt.verification === "user"
+                        ? "You confirmed the trolley after reviewing it in Aside. Checkout stays manual."
+                        : "Cart quantities matched the reviewed products. Checkout stays manual."
+                      : "Cart additions are not yet verified. Review unresolved items and check the actual cart."}
+                  </p>
+                  {basket.receipt != null && (
+                    <details>
+                      <summary>Cart receipt</summary>
+                      <pre>{JSON.stringify(basket.receipt, null, 2)}</pre>
+                    </details>
+                  )}
+                </div>
+              )}
+              <details>
+                <summary>Aside shopping handoff</summary>
+                <textarea
+                  aria-label="Aside shopping handoff"
+                  readOnly
+                  value={handoff}
+                  rows={8}
+                />
+                {handoffError && (
+                  <p role="alert" className={styles.warning}>
+                    {handoffError}
+                  </p>
                 )}
+                {basket && !serverHandoff && !handoffError && (
+                  <p>Loading exact basket handoff…</p>
+                )}
+                <button
+                  disabled={!handoff}
+                  onClick={() =>
+                    void run(async () => {
+                      await navigator.clipboard.writeText(handoff);
+                      setNotice("Shopping handoff copied.");
+                    })
+                  }
+                >
+                  Copy handoff
+                </button>
+              </details>
+            </section>
+            {selection && (
+              <div className={styles.shopList}>
+                <ShoppingCycle selection={selection} />
+                <ManualExtras
+                  selection={selection}
+                  disabled={busy}
+                  onChange={(c) => run(() => change(c))}
+                />
               </div>
             )}
-            <details>
-              <summary>Aside shopping handoff</summary>
-              <textarea
-                aria-label="Aside shopping handoff"
-                readOnly
-                value={handoff}
-                rows={8}
-              />
-              {handoffError && (
-                <p role="alert" className={styles.warning}>
-                  {handoffError}
-                </p>
-              )}
-              {basket && !serverHandoff && !handoffError && (
-                <p>Loading exact basket handoff…</p>
-              )}
-              <button
-                disabled={!handoff}
-                onClick={() =>
-                  void run(async () => {
-                    await navigator.clipboard.writeText(handoff);
-                    setNotice("Shopping handoff copied.");
-                  })
-                }
-              >
-                Copy handoff
-              </button>
-            </details>
-          </section>
+          </div>
         </>
       )}
       <div role="status" aria-live="polite" className={styles.loading}>
-        {busy ? "Saving or loading your kitchen…" : ""}
+        {busy ? "Saving…" : ""}
       </div>
     </div>
   );
 }
 function safeSource(source: string) {
   return /^https?:\/\//i.test(source) ? source : undefined;
+}
+function sourceLabel(source: string) {
+  try {
+    const host = new URL(source).hostname.replace(/^www\./, "");
+    if (host.endsWith("nytimes.com")) return "NYT Cooking";
+    if (host.endsWith("instagram.com")) return "Instagram";
+    return host.replace(/\.com$/, "");
+  } catch {
+    return "Recipe source";
+  }
 }
 function RecipePhoto({ photo, name }: { photo?: string; name: string }) {
   return (
@@ -1047,8 +1334,8 @@ function RecipePhoto({ photo, name }: { photo?: string; name: string }) {
         <img src={photo} alt={name} loading="lazy" />
       ) : (
         <div className={styles.photoPlaceholder}>
-          <ChefHat size={38} />
-          <span>From your kitchen</span>
+          <BookOpen size={28} />
+          <span>{name}</span>
         </div>
       )}
     </div>
@@ -1068,9 +1355,9 @@ function DraftEditor({
   onUse: () => void;
 }) {
   return (
-    <section className={styles.panel}>
+    <section className={styles.draftEditor}>
       <fieldset disabled={busy}>
-        <span className={styles.eyebrow}>RECIPE PREVIEW · {draft.status}</span>
+        <p>Recipe preview · {draft.status}</p>
         <h2>Make this recipe yours</h2>
         {draft.gaps.map((gap, index) => (
           <p className={styles.warning} key={index}>
