@@ -19,6 +19,11 @@ import {
   canonical,
 } from "./store.js";
 import { inspectInstagram, instagramUrl } from "./instagram.js";
+import {
+  captureAsideRecipe,
+  nytRecipeIdentity,
+  nytRecipeUrl,
+} from "./aside-recipes.js";
 import { extractEvidenceRecipe } from "./recipe-evidence-model.js";
 
 export class IntakeError extends Error {
@@ -87,6 +92,7 @@ export function canonicalSource(value: string): string {
     );
   if (["instagram.com", "www.instagram.com"].includes(url.hostname))
     return instagramUrl(value);
+  if (url.hostname === "cooking.nytimes.com") return nytRecipeUrl(value);
   url.hash = "";
   for (const key of [...url.searchParams.keys()])
     if (/^(utm_|fbclid|gclid|igsh)/i.test(key)) url.searchParams.delete(key);
@@ -330,19 +336,29 @@ export function updateDraft(
     );
   const checked = patchSchema.shape.draft.parse(patch);
   const draft = { ...current, ...checked, revision: current.revision + 1 };
+  const changedFields = Object.keys(checked).filter(
+    (field) =>
+      canonical(current[field as keyof RecipeDraft]) !==
+      canonical(checked[field as keyof typeof checked]),
+  );
   if (current.evidenceReferences) {
     draft.evidenceReferences = current.evidenceReferences.filter(
       (reference) =>
-        !Object.keys(checked).some(
+        !changedFields.some(
           (field) =>
             reference.field === field ||
             reference.field.startsWith(`${field}.`),
         ),
     );
   }
-  // User changes settle extraction ambiguities; original evidence remains available for comparison.
-  draft.gaps = recipeGaps(draft);
-  draft.status = draft.gaps.length ? "draft" : "ready";
+  // Editing recipe fields does not confirm the source transcript or other evidence warnings.
+  const previousMissing = new Set(recipeGaps(current));
+  const sourceWarnings = current.gaps.filter(
+    (gap) => !previousMissing.has(gap),
+  );
+  const missing = recipeGaps(draft);
+  draft.gaps = [...new Set([...sourceWarnings, ...missing])];
+  draft.status = missing.length ? "draft" : "ready";
   return draft;
 }
 
@@ -580,23 +596,41 @@ export async function createDraft(
   if (supplied.reduce((size, line) => size + line.text.length, 0) > 128_000)
     throw new IntakeError("Recipe evidence exceeds 128 KB.");
   const identity =
-    source ||
+    (source && new URL(source).hostname === "cooking.nytimes.com"
+      ? `nyt-recipe:${nytRecipeIdentity(source)}`
+      : source) ||
     supplied
       .flatMap((line) => line.text.split(/\n+/))
       .map((line) => line.trim().replace(/\s+/g, " "))
       .filter(Boolean)
       .join("\n");
-  const id = `recipe-draft-${hash(identity)}`;
-  // Intake has no caller revision. Its receipt identity is stable across source retries.
-  const payloadHash = hash(
-    canonical({
-      id,
-      kind: "recipe-draft",
-      actorId,
-      expectedRevision: 0,
-      payload: input,
-    }),
-  );
+  let id = `recipe-draft-${hash(identity)}`;
+  const nytIdentity =
+    source && new URL(source).hostname === "cooking.nytimes.com"
+      ? nytRecipeIdentity(source)
+      : undefined;
+  const matchesNyt = (draft: RecipeDraft): boolean => {
+    try {
+      return (
+        nytIdentity !== undefined &&
+        nytRecipeIdentity(draft.source) === nytIdentity
+      );
+    } catch {
+      return false;
+    }
+  };
+  // Receipts retain the document ID under which the original operation was recorded.
+  const payloadHashFor = (documentId: string, expectedRevision = 0) =>
+    hash(
+      canonical({
+        id: documentId,
+        kind: "recipe-draft",
+        actorId,
+        expectedRevision,
+        payload: input,
+      }),
+    );
+  let payloadHash = payloadHashFor(id);
   const replay = (prior: {
     payloadHash: string;
     result: unknown;
@@ -607,20 +641,15 @@ export async function createDraft(
       data: RecipeDraft;
       revision: number;
     };
-    // Older evidence-fill receipts used the document revision in their hash.
-    const legacyHash = hash(
-      canonical({
-        id,
-        kind: "recipe-draft",
-        actorId,
-        expectedRevision: 1,
-        payload: input,
-      }),
-    );
+    // Older URL-based and evidence-fill receipts remain valid after identity migration.
+    const validIdentity =
+      result.id === id ||
+      (nytIdentity !== undefined && matchesNyt(result.data));
     if (
-      result.id !== id ||
+      !validIdentity ||
       result.kind !== "recipe-draft" ||
-      (prior.payloadHash !== payloadHash && prior.payloadHash !== legacyHash)
+      (prior.payloadHash !== payloadHashFor(result.id) &&
+        prior.payloadHash !== payloadHashFor(result.id, 1))
     )
       throw new MealConflict(
         "This command ID was already used for a different change.",
@@ -635,6 +664,23 @@ export async function createDraft(
   };
   const previous = await receipt();
   if (previous) return previous;
+  if (nytIdentity !== undefined) {
+    // Pre-ID imports were keyed by their complete URL, including its historical slug.
+    // Prefer those documents so existing corrections and saves keep their identity.
+    const candidates = await prisma.piMealDocument.findMany({
+      where: { kind: "recipe-draft" },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true, data: true },
+    });
+    const matching = candidates.filter((row) =>
+      matchesNyt(row.data as unknown as RecipeDraft),
+    );
+    const prior = matching.find((row) => row.id !== id) ?? matching[0];
+    if (prior) {
+      id = prior.id;
+      payloadHash = payloadHashFor(id);
+    }
+  }
   const existing = await readDocument<RecipeDraft>(prisma, id, "recipe-draft");
   const untouchedPartial = (draft: RecipeDraft) => {
     if (draft.status !== "draft" || draft.ingredients.length) return false;
@@ -661,7 +707,10 @@ export async function createDraft(
         gaps.push(...result.gaps);
       } else {
         try {
-          evidence = recipeEvidenceFromHtml(await fetchRecipePage(source));
+          evidence =
+            new URL(source).hostname === "cooking.nytimes.com"
+              ? await captureAsideRecipe(source)
+              : recipeEvidenceFromHtml(await fetchRecipePage(source));
         } catch (error) {
           gaps.push(
             error instanceof Error

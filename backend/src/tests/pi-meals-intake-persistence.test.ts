@@ -1,4 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { canonical } from "../pi-meals/store.js";
+import { extractDraft } from "../pi-meals/intake.js";
 import type { PrismaClient } from "@prisma/client";
 import {
   createDraft,
@@ -6,6 +9,13 @@ import {
   saveDraft,
   fetchRecipePage,
 } from "../pi-meals/intake.js";
+vi.mock("../pi-meals/aside-recipes.js", async (original) => ({
+  ...(await original<typeof import("../pi-meals/aside-recipes.js")>()),
+  captureAsideRecipe: vi.fn(async () => {
+    throw new Error("Sign in to your authorised Aside session and retry.");
+  }),
+}));
+import { captureAsideRecipe } from "../pi-meals/aside-recipes.js";
 function memoryStore() {
   const documents = new Map<string, any>();
   const operations = new Map<string, any>();
@@ -13,6 +23,9 @@ function memoryStore() {
   const ingredientRows = new Map<string, any>();
   const client: any = {
     piMealDocument: {
+      findMany: vi.fn(async ({ where }: any) =>
+        [...documents.values()].filter((row) => row.kind === where.kind),
+      ),
       findUnique: vi.fn(
         async ({ where }: any) => documents.get(where.id) ?? null,
       ),
@@ -210,6 +223,95 @@ describe("persisted recipe intake", () => {
       }),
     ).rejects.toThrow("Quantity needed");
     expect(store.client.recipe.create).not.toHaveBeenCalled();
+  });
+  it("captures NYT automatically, persists evidence and deduplicates recipe identity without recapture", async () => {
+    vi.mocked(captureAsideRecipe).mockResolvedValueOnce([
+      { source: "page", text: recipe },
+    ]);
+    const store = memoryStore();
+    const url = "https://cooking.nytimes.com/recipes/123-soup";
+    const input = { operationId: "automatic", url };
+    const draft = await createDraft(store.prisma, "actor", input);
+    expect(draft.status).toBe("ready");
+    expect(draft.source).toBe(url);
+    expect(store.documents.get(draft.id).data.evidence).toEqual(draft.evidence);
+    expect(await createDraft(store.prisma, "actor", input)).toEqual(draft);
+    const calls = vi.mocked(captureAsideRecipe).mock.calls.length;
+    expect(
+      await createDraft(store.prisma, "actor", {
+        operationId: "duplicate-nyt",
+        url: "https://cooking.nytimes.com/recipes/123-another-slug?utm_source=test",
+      }),
+    ).toEqual(draft);
+    expect(vi.mocked(captureAsideRecipe).mock.calls.length).toBe(calls);
+  });
+  it("reuses an edited legacy URL-hash NYT draft for another slug and replays its original receipt", async () => {
+    const store = memoryStore();
+    const oldUrl =
+      "https://cooking.nytimes.com/recipes/123-old-slug?smid=legacy";
+    const id = `recipe-draft-${createHash("sha256").update(oldUrl).digest("hex")}`;
+    const oldInput = {
+      operationId: "legacy-original",
+      url: oldUrl,
+      text: recipe,
+    };
+    const original = {
+      ...extractDraft(id, oldUrl, [{ source: "user", text: recipe }]),
+      revision: 1,
+    };
+    const corrected = {
+      ...original,
+      name: "My corrected soup",
+      servings: 6,
+      revision: 4,
+    };
+    store.documents.set(id, {
+      id,
+      kind: "recipe-draft",
+      data: corrected,
+      revision: 4,
+      updatedAt: new Date(),
+    });
+    store.operations.set(oldInput.operationId, {
+      payloadHash: createHash("sha256")
+        .update(
+          canonical({
+            id,
+            kind: "recipe-draft",
+            actorId: "actor",
+            expectedRevision: 0,
+            payload: oldInput,
+          }),
+        )
+        .digest("hex"),
+      result: { id, kind: "recipe-draft", data: original, revision: 1 },
+    });
+    const captures = vi.mocked(captureAsideRecipe).mock.calls.length;
+    const retryInput = {
+      operationId: "legacy-retry",
+      url: "https://cooking.nytimes.com/recipes/123-new-slug",
+    };
+    expect(await createDraft(store.prisma, "actor", retryInput)).toEqual(
+      corrected,
+    );
+    expect(store.documents.size).toBe(1);
+    expect(vi.mocked(captureAsideRecipe).mock.calls.length).toBe(captures);
+    expect(store.operations.get("legacy-retry").documentId).toBe(id);
+    expect(await createDraft(store.prisma, "actor", retryInput)).toEqual(
+      corrected,
+    );
+    expect(await createDraft(store.prisma, "actor", oldInput)).toEqual(
+      original,
+    );
+    await expect(
+      createDraft(store.prisma, "other-actor", oldInput),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expect(
+      createDraft(store.prisma, "actor", {
+        ...oldInput,
+        url: "https://cooking.nytimes.com/recipes/456-other",
+      }),
+    ).rejects.toMatchObject({ statusCode: 409 });
   });
   it("creates an actionable draft for NYT without network or cookie access", async () => {
     const store = memoryStore();

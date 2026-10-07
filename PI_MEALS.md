@@ -2,7 +2,9 @@
 
 Choose recipes, review one grocery list, subtract what is already in the kitchen, then review a supermarket basket or continue in Aside. **Our week** adds household rotation, two cooking sessions, per-person lunches and recurring breakfast and evening supplies. Both paths use the same selected quantities.
 
-The existing recipe library, discovery and import pages remain available. Imported drafts keep their source evidence and can be completed later. NYT Cooking uses authorised page text when direct access is unavailable. Instagram imports reuse Manon Sweeper's caption, speech and OCR extraction, then use one bounded evidence interpretation call when needed. Missing amounts, yield and unclear transcription remain visible.
+The existing recipe library, discovery and import pages remain available. Paste an NYT Cooking link to read it through the household's signed-in Aside browser, or choose **Find recipes open in Aside** to import selected tabs. Existing recipe tabs stay open; temporary capture tabs close afterward. Reimporting the same NYT recipe preserves previous corrections.
+
+Every import is stored as a shared PostgreSQL draft, including incomplete Instagram recipes. Closing the page or restarting the server preserves it. **Save draft changes** stores edits; **Save to recipe library** keeps a finished recipe for future shops without adding it to the current shop. Instagram imports reuse Manon Sweeper's caption, speech and OCR extraction, then use one bounded evidence interpretation call when needed. Missing amounts, yield and unclear transcription remain visible.
 
 ## Run on the household host
 
@@ -19,11 +21,13 @@ The build copies both Python helpers into `backend/dist/scripts`. Do not deploy 
 
 ## Shopping and recovery
 
-New basket writes and Aside launches default to disabled. Read-only product search uses the existing encrypted Ocado session. `OCADO_BROWSER_CHANNEL=chrome` uses installed Chrome; omitting it requires Playwright Chromium. A login, CAPTCHA, incomplete cart read or missing pack size leaves an actionable error.
+For the normal shopping flow, install and sign in to Aside on the household host. Read `aside guide`, run `aside settings save-sessions true` so shopping tasks appear in Aside's chat list, sign in to NYT Cooking and Ocado there, and set `PI_MEALS_ASIDE_LAUNCH_ENABLED=true` in the backend environment. Restart the backend after configuration changes. `PI_MEALS_ASIDE_BINARY` can specify an absolute CLI path when the server has a restricted PATH. Aside Vault may need unlocking to fill a saved retailer login.
+
+**Shop with Aside** creates the basket and launches its task in one action. Aside chooses suitable products and whole pack counts; unquantified ingredients remain questions for the household. Reloading the app restores the recorded shopping task and its stop/review controls. **Choose products myself** retains the optional direct product picker. Its retailer writes have a separate `PI_MEALS_CART_MUTATIONS_ENABLED` switch, disabled by default. Read-only product search uses the existing encrypted Ocado session. `OCADO_BROWSER_CHANNEL=chrome` uses installed Chrome; omitting it requires Playwright Chromium.
 
 The application blocks the old assistant, cart-add and order endpoints. Checkout remains on Ocado. Stop other bots and scheduled cart writers before enabling a real shopping trial. The account guard records an attempt before any effect. A failed or interrupted click requires read-back; the application does not repeat it. An unknown owner remains unresolved.
 
-Aside is attended. Its local process exit is not proof that the remote task stopped or the trolley matched the list. Choose “Stop Aside and review trolley” first. The app stops the captured session and requires an idle readback. Review the stopped trolley, then choose “I reviewed the stopped trolley; finish shopping”. The account remains reserved until this second action; confirmation is bound to that stopped session and revision. The app records your confirmation separately from automatic product-and-quantity reconciliation. Missing session identity or uncertain stop results keep the attempt unresolved. Never enable a second executor while an attempt is unresolved.
+Aside is attended. Its local process exit is not proof that the remote task stopped or the trolley matched the list. Choose **Stop shopping & review trolley** first. The app stops the captured session and requires an idle readback. Review the stopped trolley, then choose **I’ve checked the trolley**. The account remains reserved until this second action; confirmation is bound to that stopped session and revision. The app records your confirmation separately from automatic product-and-quantity reconciliation. Missing session identity or uncertain stop results keep the attempt unresolved. Never enable a second executor while an attempt is unresolved.
 
 The market page caches a data-free shell and stores this household's list and pending purchase observations on the device. It shows offline and pending state. The same operation ID survives reconnect; a conflicting revision remains visible. Sync purchases or deliberately clear them before changing the saved list/member. Signing out clears the device's offline list.
 

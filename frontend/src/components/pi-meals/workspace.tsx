@@ -23,13 +23,19 @@ import {
   type BasketProposal,
   type SelectionChange,
   type AssistantResult,
+  type AsideRecipeTab,
 } from "@/lib/pi-meals-api";
 import styles from "./workspace.module.css";
 import { formatQuantity } from "@/lib/pi-meals-format";
 import { ProductPicker } from "./product-picker";
+import { productsApi } from "@/lib/pi-meals-products-api";
 import { ShoppingCycle } from "./shopping-cycle";
 import { ManualExtras } from "./manual-extras";
 import { saveCachedShopping } from "@/lib/pi-meals-shopping-api";
+
+function keepActiveBasket(current: BasketProposal | null) {
+  return current?.receipt && current.status !== "complete" ? current : null;
+}
 
 export function MealsWorkspace() {
   const [libraryLimit, setLibraryLimit] = useState(12);
@@ -37,6 +43,10 @@ export function MealsWorkspace() {
   const [importOpen, setImportOpen] = useState(false);
   const [selectionExpanded, setSelectionExpanded] = useState(false);
   const [latestDraftId, setLatestDraftId] = useState<string | null>(null);
+  const [asideTabs, setAsideTabs] = useState<AsideRecipeTab[] | null>(null);
+  const [chosenAsideUrls, setChosenAsideUrls] = useState<string[]>([]);
+  const [dirtyDrafts, setDirtyDrafts] = useState<Set<string>>(new Set());
+  const [basketLoading, setBasketLoading] = useState(false);
   const [stockFilter, setStockFilter] = useState<"all" | "needed" | "covered">(
     "all",
   );
@@ -71,7 +81,10 @@ export function MealsWorkspace() {
     [member, setMember] = useState("James"),
     [pin, setPin] = useState(""),
     [notice, setNotice] = useState("");
+  const actionInFlight = useRef(false);
   const run = useCallback(async (action: () => Promise<void>) => {
+    if (actionInFlight.current) return;
+    actionInFlight.current = true;
     setBusy(true);
     setError("");
     try {
@@ -81,6 +94,7 @@ export function MealsWorkspace() {
       setError(e instanceof Error ? e.message : "Something went wrong");
     } finally {
       setBusy(false);
+      actionInFlight.current = false;
     }
   }, []);
   const load = useCallback(async () => {
@@ -125,6 +139,44 @@ export function MealsWorkspace() {
     if (selection) localStorage.setItem("pi-meals-selection", selection.id);
   }, [selection]);
   useEffect(() => {
+    if (!dirtyDrafts.size) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirtyDrafts]);
+  useEffect(() => {
+    if (!selectionId) return;
+    let cancelled = false;
+    setBasketLoading(true);
+    void mealsApi
+      .baskets(selectionId)
+      .then((rows) => {
+        if (!cancelled)
+          setBasket(
+            rows.find((row) => !!row.receipt && row.status !== "complete") ||
+              rows[0] ||
+              null,
+          );
+      })
+      .catch((e) => {
+        if (!cancelled)
+          setError(
+            e instanceof Error
+              ? e.message
+              : "Could not load your saved trolley task.",
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setBasketLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectionId]);
+  useEffect(() => {
     setServerHandoff("");
     setHandoffError("");
     if (!basketId) return;
@@ -168,7 +220,7 @@ export function MealsWorkspace() {
           const refreshed = await mealsApi.selection(selectionId!);
           if (cancelled || selectionRef.current?.id !== selectionId) return;
           setSelection(refreshed);
-          setBasket(null);
+          setBasket(keepActiveBasket);
         }
         setAssistant(result);
         if (!["queued", "running"].includes(result.status)) return;
@@ -218,7 +270,7 @@ export function MealsWorkspace() {
       const refreshed = await mealsApi.selection(id);
       if (selectionRef.current?.id === id) {
         setSelection(refreshed);
-        setBasket(null);
+        setBasket(keepActiveBasket);
       }
     }
   }
@@ -232,7 +284,7 @@ export function MealsWorkspace() {
       const refreshed = await mealsApi.selection(id);
       if (selectionRef.current?.id !== id) return;
       setSelection(refreshed);
-      setBasket(null);
+      setBasket(keepActiveBasket);
     }
     setAssistant(result);
   }
@@ -257,7 +309,7 @@ export function MealsWorkspace() {
       });
     } else setUndoStock(null);
     setSelection(updated);
-    setBasket(null);
+    setBasket(keepActiveBasket);
   }
   async function add(recipe: Recipe) {
     if (!selection) return;
@@ -276,23 +328,71 @@ export function MealsWorkspace() {
         url,
         urls.length === 1 ? pageText || undefined : undefined,
       );
-      setDrafts((prev) => [...prev.filter((d) => d.id !== result.id), result]);
+      setDrafts((prev) =>
+        dirtyDrafts.has(result.id)
+          ? prev
+          : [...prev.filter((d) => d.id !== result.id), result],
+      );
       setLatestDraftId(result.id);
     }
     if (!urls.length || (urls.length > 1 && pageText.trim())) {
       const result = await mealsApi.intake(undefined, pageText);
-      setDrafts((prev) => [...prev.filter((d) => d.id !== result.id), result]);
+      setDrafts((prev) =>
+        dirtyDrafts.has(result.id)
+          ? prev
+          : [...prev.filter((d) => d.id !== result.id), result],
+      );
       setLatestDraftId(result.id);
     }
     setLinks("");
     setPageText("");
+    setNotice(
+      "Recipes saved as drafts. You can close this page and return later.",
+    );
+  }
+  async function findAsideTabs() {
+    const { tabs } = await mealsApi.asideTabs();
+    setAsideTabs(tabs);
+    setChosenAsideUrls(tabs.slice(0, 20).map((tab) => tab.url));
+  }
+  async function importAsideTabs() {
+    const result = await mealsApi.importAside(chosenAsideUrls);
+    setDrafts((previous) => [
+      ...previous.filter(
+        (draft) => !result.drafts.some((row) => row.id === draft.id),
+      ),
+      ...result.drafts.map((draft) =>
+        dirtyDrafts.has(draft.id)
+          ? previous.find((row) => row.id === draft.id) || draft
+          : draft,
+      ),
+    ]);
+    setLatestDraftId(result.drafts.at(-1)?.id ?? null);
+    setNotice(
+      `${result.drafts.length} recipe${result.drafts.length === 1 ? "" : "s"} saved as drafts.`,
+    );
+    if (result.failures.length)
+      throw new Error(
+        result.failures.map((failure) => failure.message).join(" "),
+      );
+    setAsideTabs(null);
+    setChosenAsideUrls([]);
+  }
+  async function persistDraft(draft: RecipeDraft) {
+    const edited = await mealsApi.editDraft(draft);
+    setDrafts((rows) =>
+      rows.map((row) => (row.id === draft.id ? edited : row)),
+    );
+    setDirtyDrafts((current) => {
+      const next = new Set(current);
+      next.delete(draft.id);
+      return next;
+    });
+    return edited;
   }
   async function addDraftToShop(draft: RecipeDraft) {
     draftSnapshot(draft);
-    const edited = await mealsApi.editDraft(draft);
-    setDrafts((prev) =>
-      prev.map((row) => (row.id === draft.id ? edited : row)),
-    );
+    const edited = await persistDraft(draft);
     if (selection)
       await change({
         type: "replace_items",
@@ -300,21 +400,47 @@ export function MealsWorkspace() {
       });
   }
   async function saveDraft(draft: RecipeDraft) {
-    const edited = await mealsApi.editDraft(draft);
-    setDrafts((prev) =>
-      prev.map((row) => (row.id === draft.id ? edited : row)),
-    );
+    const edited = await persistDraft(draft);
     const stored = await mealsApi.saveDraft(edited);
     setDrafts((prev) =>
       prev.map((row) => (row.id === draft.id ? stored : row)),
     );
-    if (stored.recipeId && selection) {
-      const full = await mealsApi.recipe(stored.recipeId);
-      await change({
-        type: "replace_items",
-        items: [...selection.items, recipeSnapshot(full)],
-      });
+    if (stored.recipeId) {
       setLibrary(await mealsApi.library());
+      setNotice(`${stored.name} saved to your recipe library.`);
+    }
+  }
+  async function startAsideShop() {
+    if (!selection) return;
+    const previous = await mealsApi.baskets(selection.id);
+    const existing = previous.find(
+      (row) =>
+        row.executor === "aside" && !!row.receipt && row.status !== "complete",
+    );
+    if (existing) {
+      setBasket(existing);
+      setNotice("Your existing Aside shopping task is below.");
+      return;
+    }
+    const prepared = await mealsApi.basket(selection.id, "aside");
+    setBasket(prepared);
+    try {
+      const launched = await productsApi.aside(prepared);
+      setBasket(launched);
+      const receipt = launched.receipt as
+        { sessionId?: string; error?: string } | undefined;
+      if (receipt?.error) throw new Error(receipt.error);
+      if (!receipt?.sessionId)
+        throw new Error(
+          "Aside has not confirmed its task identity. Refresh this task’s status before continuing.",
+        );
+      setNotice(
+        "Aside has your shopping list. Follow the task in Aside, then review your trolley here.",
+      );
+    } catch (error) {
+      // A lost HTTP reply must recover the recorded launch, never start another task.
+      setBasket(await mealsApi.getBasket(prepared.id).catch(() => prepared));
+      throw error;
     }
   }
   const need =
@@ -627,9 +753,61 @@ export function MealsWorkspace() {
                   </button>
                 </div>
                 <p>
-                  NYT Cooking, Instagram, or a recipe page open in Aside.
-                  Preview the ingredients before you save.
+                  Paste an NYT or Instagram link, or bring in the NYT recipes
+                  you already have open in Aside. Every import is saved as a
+                  draft.
                 </p>
+                <button disabled={busy} onClick={() => void run(findAsideTabs)}>
+                  Find recipes open in Aside
+                </button>
+                {asideTabs !== null && (
+                  <div className={styles.asideTabs}>
+                    {asideTabs.length === 0 ? (
+                      <p>
+                        No NYT recipe tabs are open in Aside. Paste a link here
+                        and we’ll open and read it for you.
+                      </p>
+                    ) : (
+                      <>
+                        {asideTabs.length > 20 && (
+                          <p>
+                            Select up to 20 recipes at a time. The first 20 are
+                            selected.
+                          </p>
+                        )}
+                        {asideTabs.map((tab) => (
+                          <label key={tab.targetId}>
+                            <input
+                              type="checkbox"
+                              checked={chosenAsideUrls.includes(tab.url)}
+                              disabled={
+                                busy ||
+                                (!chosenAsideUrls.includes(tab.url) &&
+                                  chosenAsideUrls.length >= 20)
+                              }
+                              onChange={(event) =>
+                                setChosenAsideUrls((urls) =>
+                                  event.target.checked
+                                    ? [...urls, tab.url]
+                                    : urls.filter((url) => url !== tab.url),
+                                )
+                              }
+                            />
+                            <span>{tab.title}</span>
+                          </label>
+                        ))}
+                        <button
+                          className={styles.primary}
+                          disabled={busy || !chosenAsideUrls.length}
+                          onClick={() => void run(importAsideTabs)}
+                        >
+                          Import {chosenAsideUrls.length} recipe
+                          {chosenAsideUrls.length === 1 ? "" : "s"}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
                 <Link href="/import">Other import tools ↗</Link>
               </div>
               <form
@@ -648,7 +826,7 @@ export function MealsWorkspace() {
                   />
                 </label>
                 <details className={styles.sourceText}>
-                  <summary>Paste recipe text from Aside or Instagram</summary>
+                  <summary>Add your own recipe text or extra details</summary>
                   <label>
                     Recipe text{" "}
                     <textarea
@@ -660,13 +838,17 @@ export function MealsWorkspace() {
                   </label>
                 </details>
                 <button className={styles.primary} disabled={busy}>
-                  {busy ? "Working…" : "Preview recipes"}{" "}
+                  {busy ? "Importing…" : "Import & save drafts"}{" "}
                   <ArrowRight size={16} />
                 </button>
               </form>
               {drafts.length > 0 && (
                 <div className={styles.draftList}>
                   <h3>Imported drafts · {drafts.length}</h3>
+                  <p>
+                    Saved in your shared kitchen, including incomplete recipes.
+                    Move finished recipes to your library whenever you’re ready.
+                  </p>
                   {drafts.map((draft) => (
                     <details
                       key={draft.id}
@@ -683,12 +865,22 @@ export function MealsWorkspace() {
                       <DraftEditor
                         draft={draft}
                         busy={busy}
-                        onChange={(value) =>
+                        dirty={dirtyDrafts.has(draft.id)}
+                        onChange={(value) => {
+                          setDirtyDrafts((current) =>
+                            new Set(current).add(value.id),
+                          );
                           setDrafts((rows) =>
                             rows.map((row) =>
                               row.id === value.id ? value : row,
                             ),
-                          )
+                          );
+                        }}
+                        onSaveChanges={() =>
+                          void run(async () => {
+                            await persistDraft(draft);
+                            setNotice("Draft changes saved.");
+                          })
                         }
                         onSave={() => void run(() => saveDraft(draft))}
                         onUse={() => void run(() => addDraftToShop(draft))}
@@ -1030,7 +1222,7 @@ export function MealsWorkspace() {
                           await mealsApi.command(selection, undoStock.command),
                         );
                         setUndoStock(null);
-                        setBasket(null);
+                        setBasket(keepActiveBasket);
                       })
                     }
                   >
@@ -1165,26 +1357,31 @@ export function MealsWorkspace() {
               <div>
                 <h2>Send the list to Ocado</h2>
                 <p>
-                  Let Aside help with the trolley, or choose products here. You
-                  review the basket before checkout.
+                  Aside chooses products and pack sizes, then adds what you need
+                  to your Ocado trolley. Review it before placing your order.
                 </p>
                 <div className={styles.toolbar}>
                   <button
                     className={styles.primary}
-                    disabled={busy || !selection || !need.length}
-                    onClick={() =>
-                      void run(async () => {
-                        if (selection)
-                          setBasket(
-                            await mealsApi.basket(selection.id, "aside"),
-                          );
-                      })
+                    disabled={
+                      busy ||
+                      basketLoading ||
+                      !selection ||
+                      !need.length ||
+                      (!!basket?.receipt && basket.status !== "complete")
                     }
+                    onClick={() => void run(startAsideShop)}
                   >
                     Shop with Aside <ArrowRight size={16} />
                   </button>
                   <button
-                    disabled={busy || !selection || !need.length}
+                    disabled={
+                      busy ||
+                      basketLoading ||
+                      !selection ||
+                      !need.length ||
+                      (!!basket?.receipt && basket.status !== "complete")
+                    }
                     onClick={() =>
                       void run(async () => {
                         if (selection)
@@ -1194,18 +1391,30 @@ export function MealsWorkspace() {
                       })
                     }
                   >
-                    Choose Ocado products
+                    Choose products myself
                   </button>
                 </div>
               </div>
               {basket && (
                 <div className={styles.basketReview}>
-                  <h3>Basket: {basket.status.replace("_", " ")}</h3>
-                  {basket.unresolved.map((reason, index) => (
-                    <p className={styles.warning} key={index}>
-                      {reason}
-                    </p>
-                  ))}
+                  {!!basket.receipt &&
+                    basket.status !== "complete" &&
+                    basket.selectionRevision !== selection?.revision && (
+                      <p className={styles.warning}>
+                        This shopping task uses an earlier version of your list.
+                        Stop it and review the trolley before starting an
+                        updated shop.
+                      </p>
+                    )}
+                  {basket.executor !== "aside" && (
+                    <h3>Basket: {basket.status.replace("_", " ")}</h3>
+                  )}
+                  {basket.executor !== "aside" &&
+                    basket.unresolved.map((reason, index) => (
+                      <p className={styles.warning} key={index}>
+                        {reason}
+                      </p>
+                    ))}
                   <ProductPicker
                     basket={basket}
                     key={basket.id}
@@ -1219,45 +1428,49 @@ export function MealsWorkspace() {
                     }
                     disabled={busy}
                   />
-                  <div className={styles.toolbar}>
-                    <button
-                      disabled={
-                        busy ||
-                        basket.status !== "ready" ||
-                        basket.executor !== "ocado"
-                      }
-                      onClick={() =>
-                        void run(async () => {
-                          if (selection)
-                            setBasket(
-                              await mealsApi.fill(basket, selection.revision),
-                            );
-                        })
-                      }
-                    >
-                      Fill basket
-                    </button>
-                    <button
-                      disabled={busy}
-                      onClick={() =>
-                        void run(async () =>
-                          setBasket(await mealsApi.reconcile(basket)),
-                        )
-                      }
-                    >
-                      Check actual cart
-                    </button>
-                  </div>
-                  <p>
-                    {basket.status === "complete"
-                      ? typeof basket.receipt === "object" &&
-                        basket.receipt !== null &&
-                        "verification" in basket.receipt &&
-                        basket.receipt.verification === "user"
-                        ? "You confirmed the trolley after reviewing it in Aside. Checkout stays manual."
-                        : "Cart quantities matched the reviewed products. Checkout stays manual."
-                      : "Cart additions are not yet verified. Review unresolved items and check the actual cart."}
-                  </p>
+                  {basket.executor !== "aside" && (
+                    <div className={styles.toolbar}>
+                      <button
+                        disabled={
+                          busy ||
+                          basket.status !== "ready" ||
+                          basket.executor !== "ocado"
+                        }
+                        onClick={() =>
+                          void run(async () => {
+                            if (selection)
+                              setBasket(
+                                await mealsApi.fill(basket, selection.revision),
+                              );
+                          })
+                        }
+                      >
+                        Fill basket
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() =>
+                          void run(async () =>
+                            setBasket(await mealsApi.reconcile(basket)),
+                          )
+                        }
+                      >
+                        Check actual cart
+                      </button>
+                    </div>
+                  )}
+                  {basket.executor !== "aside" && (
+                    <p>
+                      {basket.status === "complete"
+                        ? typeof basket.receipt === "object" &&
+                          basket.receipt !== null &&
+                          "verification" in basket.receipt &&
+                          basket.receipt.verification === "user"
+                          ? "You confirmed the trolley after reviewing it in Aside. Checkout stays manual."
+                          : "Cart quantities matched the reviewed products. Checkout stays manual."
+                        : "Cart additions are not yet verified. Review unresolved items and check the actual cart."}
+                    </p>
+                  )}
                   {basket.receipt != null && (
                     <details>
                       <summary>Cart receipt</summary>
@@ -1267,7 +1480,7 @@ export function MealsWorkspace() {
                 </div>
               )}
               <details>
-                <summary>Aside shopping handoff</summary>
+                <summary>View the shopping instructions sent to Aside</summary>
                 <textarea
                   aria-label="Aside shopping handoff"
                   readOnly
@@ -1282,17 +1495,6 @@ export function MealsWorkspace() {
                 {basket && !serverHandoff && !handoffError && (
                   <p>Loading exact basket handoff…</p>
                 )}
-                <button
-                  disabled={!handoff}
-                  onClick={() =>
-                    void run(async () => {
-                      await navigator.clipboard.writeText(handoff);
-                      setNotice("Shopping handoff copied.");
-                    })
-                  }
-                >
-                  Copy handoff
-                </button>
               </details>
             </section>
             {selection && (
@@ -1309,7 +1511,7 @@ export function MealsWorkspace() {
         </>
       )}
       <div role="status" aria-live="polite" className={styles.loading}>
-        {busy ? "Saving…" : ""}
+        {busy ? "Working…" : ""}
       </div>
     </div>
   );
@@ -1344,20 +1546,30 @@ function RecipePhoto({ photo, name }: { photo?: string; name: string }) {
 function DraftEditor({
   draft,
   busy,
+  dirty,
   onChange,
   onSave,
+  onSaveChanges,
   onUse,
 }: {
   draft: RecipeDraft;
   busy: boolean;
+  dirty: boolean;
   onChange: (draft: RecipeDraft) => void;
   onSave: () => void;
+  onSaveChanges: () => void;
   onUse: () => void;
 }) {
   return (
     <section className={styles.draftEditor}>
       <fieldset disabled={busy}>
-        <p>Recipe preview · {draft.status}</p>
+        <p role="status">
+          {dirty
+            ? "Changes not saved yet"
+            : draft.status === "saved"
+              ? "Saved in your recipe library"
+              : "Draft saved in your shared kitchen"}
+        </p>
         <h2>Make this recipe yours</h2>
         {draft.gaps.map((gap, index) => (
           <p className={styles.warning} key={index}>
@@ -1477,6 +1689,9 @@ function DraftEditor({
             </p>
           ))}
         </details>
+        <button disabled={busy || !dirty} onClick={onSaveChanges}>
+          Save draft changes
+        </button>
         <button
           className={styles.primary}
           disabled={
@@ -1500,7 +1715,7 @@ function DraftEditor({
         >
           {draft.status === "saved"
             ? "Saved to your library"
-            : "Save to library & add to this shop"}
+            : "Save to recipe library"}
         </button>
       </fieldset>
     </section>

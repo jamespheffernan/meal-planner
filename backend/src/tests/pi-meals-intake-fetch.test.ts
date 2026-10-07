@@ -48,6 +48,12 @@ vi.mock("node:https", () => ({
     return request;
   },
 }));
+vi.mock("../pi-meals/aside-recipes.js", async (original) => ({
+  ...(await original<typeof import("../pi-meals/aside-recipes.js")>()),
+  captureAsideRecipe: vi.fn(async () => {
+    throw new Error("Sign in to your authorised Aside session and retry.");
+  }),
+}));
 import { fetchRecipePage, createDraft } from "../pi-meals/intake.js";
 describe("bounded recipe fetch", () => {
   beforeEach(() => {
@@ -68,6 +74,7 @@ describe("bounded recipe fetch", () => {
     const operations = new Map<string, any>();
     const prisma: any = {
       piMealDocument: {
+        findMany: async ({where}: any) => [...documents.values()].filter(row => row.kind === where.kind),
         findUnique: async ({ where }: any) => documents.get(where.id),
         create: async ({ data }: any) => documents.set(data.id, data),
       },
@@ -95,6 +102,7 @@ describe("bounded recipe fetch", () => {
     const operations = new Map<string, any>();
     const prisma: any = {
       piMealDocument: {
+        findMany: async ({where}: any) => [...documents.values()].filter(row => row.kind === where.kind),
         findUnique: async ({ where }: any) => documents.get(where.id),
         create: async ({ data }: any) => documents.set(data.id, data),
       },
@@ -134,6 +142,7 @@ describe("bounded recipe fetch", () => {
     const operations = new Map<string, any>();
     const prisma: any = {
       piMealDocument: {
+        findMany: async ({where}: any) => [...documents.values()].filter(row => row.kind === where.kind),
         findUnique: async ({ where }: any) => documents.get(where.id),
         create: async ({ data }: any) => documents.set(data.id, data),
         updateMany: async ({ where, data }: any) => {

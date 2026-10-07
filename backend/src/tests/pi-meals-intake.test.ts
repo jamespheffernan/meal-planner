@@ -55,6 +55,44 @@ describe("recipe intake evidence", () => {
     expect(changed.name).toBe("My soup");
     expect(changed.status).toBe("ready");
   });
+  it("keeps source warnings when an unchanged name is saved and removes resolved quantity gaps", () => {
+    const warnings = [
+      "Transcript food name needs review: unusual bean spelling.",
+      "Speech transcription may be incomplete.",
+    ];
+    const original = extractDraft(
+      "source-warnings",
+      "",
+      [
+        {
+          source: "speech",
+          text: "Soup\nServes 2\nIngredients\nbeans\nMethod\nSimmer.",
+        },
+      ],
+      warnings,
+    );
+    original.evidenceReferences = [
+      { field: "ingredients.0.name", evidenceIndexes: [0], quote: "beans" },
+    ];
+    const unchanged = updateDraft(original, {
+      name: original.name,
+      ingredients: original.ingredients,
+    });
+    expect(unchanged.gaps).toEqual(original.gaps);
+    expect(unchanged.evidence).toEqual(original.evidence);
+    expect(unchanged.evidenceReferences).toEqual(original.evidenceReferences);
+    const corrected = updateDraft(unchanged, {
+      ingredients: [{ name: "beans", quantity: 200, unit: "g" }],
+    });
+    expect(corrected.gaps).toEqual(warnings);
+    expect(corrected.gaps).not.toContain("Quantity needed for beans.");
+    expect(corrected.gaps).not.toContain("Unit needed for beans.");
+    expect(corrected.status).toBe("ready");
+    expect(corrected.evidenceReferences).toEqual([]);
+    expect(updateDraft(corrected, { name: corrected.name }).gaps).toEqual(
+      warnings,
+    );
+  });
   it("canonicalizes tracking URL variants", () =>
     expect(
       canonicalSource("https://www.instagram.com/reel/ABC/?igsh=xxx#x"),

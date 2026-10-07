@@ -280,6 +280,63 @@ describe("basket effects", () => {
 });
 
 describe("attended Aside launch receipts", () => {
+  it.each([false, true])(
+    "launches Aside to resolve unknown amounts with known lines present: %s",
+    async (known) => {
+      vi.stubEnv("PI_MEALS_ASIDE_LAUNCH_ENABLED", "true");
+      launch.mockResolvedValue({
+        processId: 123,
+        logPath: "/test/attempt.log",
+      });
+      const salt = {
+        ...state.selection!.lines[0],
+        id: "salt",
+        name: "Salt",
+        quantity: null,
+        buyQuantity: null,
+        unit: "",
+      };
+      state.selection!.lines = known
+        ? [...state.selection!.lines, salt]
+        : [salt];
+      try {
+        const db = database();
+        const basket = await createBasket(db, "actor", {
+          operationId: "create",
+          selectionId: "s",
+          executor: "aside",
+        });
+        expect(basket.unresolved.join(" ")).toContain("Aside");
+        const opened = await openAsideBasket(db, basket.id, "actor", {
+          operationId: "open",
+          expectedRevision: basket.revision,
+        });
+        expect(launch).toHaveBeenCalledTimes(1);
+        const handoff = (opened.receipt as any).handoff;
+        expect(handoff).toContain('"quantity": null');
+        expect(handoff).toContain('"needsReview": true');
+        expect(handoff).toContain("do not invent an amount");
+        if (known) expect(handoff).toContain('"quantity": 800');
+        const directDb = database();
+        const direct = await createBasket(directDb, "actor", {
+          operationId: "direct",
+          selectionId: "s",
+          executor: "ocado",
+        });
+        await expect(
+          prepareBasket(directDb, direct.id, "actor", {
+            operationId: "prepare",
+            expectedRevision: direct.revision,
+            lines: [],
+          }),
+        ).rejects.toThrow("Resolve ingredient quantities");
+      } finally {
+        vi.unstubAllEnvs();
+        launch.mockReset();
+      }
+    },
+  );
+
   it("records process identity and exact handoff and never launches a replay", async () => {
     vi.stubEnv("PI_MEALS_ASIDE_LAUNCH_ENABLED", "true");
     launch.mockResolvedValue({ processId: 123, logPath: "/test/attempt.log" });

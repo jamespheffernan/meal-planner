@@ -1,3 +1,10 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import {
+  listAsideRecipeTabs,
+  nytRecipeIdentity,
+  nytRecipeUrl,
+} from "./aside-recipes.js";
 import type { FastifyInstance } from "fastify";
 import { getMealActorId } from "./auth.js";
 import type { RecipeDraft } from "./contracts.js";
@@ -21,6 +28,52 @@ export default async function intakeRoutes(fastify: FastifyInstance) {
     if (!body.success)
       return reply.code(400).send({ error: body.error.message });
     return createDraft(fastify.prisma, getMealActorId(request), body.data);
+  });
+  fastify.get("/aside-tabs", async (request) => {
+    getMealActorId(request);
+    return { tabs: await listAsideRecipeTabs() };
+  });
+  fastify.post("/from-aside", async (request, reply) => {
+    const parsed = z
+      .object({
+        operationId: z.string().min(1).max(200),
+        urls: z.array(z.string().max(4000)).min(1).max(20),
+      })
+      .strict()
+      .safeParse(request.body);
+    if (!parsed.success)
+      return reply.code(400).send({ error: parsed.error.message });
+    const actor = getMealActorId(request);
+    const drafts: RecipeDraft[] = [];
+    const failures: Array<{ url: string; message: string }> = [];
+    const seen = new Set<string>();
+    for (const supplied of parsed.data.urls) {
+      try {
+        const url = nytRecipeUrl(supplied);
+        const identity = nytRecipeIdentity(url);
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        const operationId = `aside-${createHash("sha256")
+          .update(JSON.stringify([parsed.data.operationId, identity]))
+          .digest("hex")}`;
+        const draft = await createDraft(fastify.prisma, actor, {
+          operationId,
+          url,
+        });
+        drafts.push(draft);
+        if (!draft.ingredients.length || !draft.instructions.length)
+          failures.push({ url, message: draft.gaps.join(" ") });
+      } catch (error) {
+        failures.push({
+          url: supplied,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Aside recipe import failed.",
+        });
+      }
+    }
+    return { drafts, failures };
   });
   fastify.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
     getMealActorId(request);

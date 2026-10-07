@@ -484,6 +484,24 @@
   font-size: 12px;
   margin-top: 12px;
 }
+.asideTabs {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+.asideTabs label {
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  margin: 0;
+}
+.asideTabs input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  margin: 2px 0;
+  accent-color: var(--green);
+}
 .intake form > label:first-child {
   margin-top: 0;
 }

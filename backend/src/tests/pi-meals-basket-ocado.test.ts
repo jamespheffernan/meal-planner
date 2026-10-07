@@ -234,6 +234,9 @@ describe("bounded Aside launch identity capture using a fake process", () => {
         processId: 4567,
         sessionId: "8kvJyD90jE3458Z2",
         sessionIdentity: "captured",
+        processState: "failed",
+        exitCode: 1,
+        error: "Aside CLI exited 1: Model unavailable",
       });
       expect(vi.mocked(spawn).mock.calls[0].slice(0, 2)).toEqual([
         "aside",
@@ -246,6 +249,40 @@ describe("bounded Aside launch identity capture using a fake process", () => {
       await rm(directory, { recursive: true, force: true });
     }
   });
+  it.each([false, true])(
+    "detects immediate CLI failure and preserves a stderr identity when present (%s)",
+    async (withIdentity) => {
+      const { directory, child } = await fixture();
+      vi.mocked(spawn).mockImplementation(() => {
+        setImmediate(() => {
+          child.emit("spawn");
+          if (withIdentity)
+            child.stderr.write("created new session: abcdefgh12345678\n");
+          child.stderr.write("Authentication unavailable\n");
+          child.emit("close", 1);
+        });
+        return child as unknown as ReturnType<typeof spawn>;
+      });
+      try {
+        const { launchAsideAttempt } = await import("../pi-meals/aside.js");
+        const result = await launchAsideAttempt("Fixture only", "failure");
+        expect(result).toMatchObject({
+          sessionIdentity: withIdentity ? "captured" : "unknown",
+          processState: "failed",
+          exitCode: 1,
+        });
+        expect(result.sessionId).toBe(
+          withIdentity ? "abcdefgh12345678" : undefined,
+        );
+        expect(result.error).toContain("Authentication unavailable");
+        expect(spawn).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.unstubAllEnvs();
+        vi.mocked(spawn).mockReset();
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
   it("returns unknown after the five-second identity deadline without relaunching", async () => {
     const { directory, child } = await fixture();
     vi.useFakeTimers();
@@ -271,7 +308,13 @@ describe("bounded Aside launch identity capture using a fake process", () => {
       expect(result.sessionIdentity).toBe("unknown");
       expect(result.sessionId).toBeUndefined();
       expect(spawn).toHaveBeenCalledTimes(1);
+      child.stderr.write("Late CLI failure\n");
       child.emit("close", 1);
+      const { inspectAsideProcess } = await import("../pi-meals/aside.js");
+      expect(inspectAsideProcess(result.logPath)).toMatchObject({
+        processState: "failed",
+        exitCode: 1,
+      });
     } finally {
       vi.useRealTimers();
       vi.unstubAllEnvs();

@@ -8,13 +8,21 @@ import {
   finishAsideBasket,
   stopAsideBasket,
   getBasket,
+  listBaskets,
   openAsideBasket,
   prepareBasket,
   reconcileBasket,
 } from "./baskets.js";
+import { inspectAsideSession, inspectAsideProcess } from "./aside.js";
 import { searchMealProducts, withOcadoExecutor } from "./ocado.js";
 import type { BasketManifestLine } from "./contracts.js";
 export default async function basketRoutes(fastify: FastifyInstance) {
+  fastify.get<{ Querystring: { selectionId?: string } }>(
+    "/",
+    async (request) => ({
+      baskets: await listBaskets(fastify.prisma, request.query.selectionId),
+    }),
+  );
   fastify.get<{ Querystring: { q?: string } }>(
     "/products",
     async (request) => ({
@@ -38,12 +46,34 @@ export default async function basketRoutes(fastify: FastifyInstance) {
         ),
       ),
   );
-  fastify.get<{ Params: { id: string } }>(
-    "/:id",
-    async (request, reply) =>
-      (await getBasket(fastify.prisma, request.params.id)) ??
-      reply.code(404).send({ error: "Basket not found." }),
-  );
+  fastify.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
+    const basket = await getBasket(fastify.prisma, request.params.id);
+    if (!basket) return reply.code(404).send({ error: "Basket not found." });
+    if (basket.executor === "aside") {
+      const receipt = basket.receipt as { logPath?: string } | undefined;
+      const liveProcess = receipt?.logPath
+        ? inspectAsideProcess(receipt.logPath)
+        : undefined;
+      if (liveProcess) basket.receipt = { ...receipt, ...liveProcess };
+    }
+    if (basket.executor !== "aside" || !basket.taskId) return basket;
+    try {
+      return {
+        ...basket,
+        asideSession: await inspectAsideSession(basket.taskId),
+      };
+    } catch (error) {
+      return {
+        ...basket,
+        asideSession: {
+          sessionId: basket.taskId,
+          status: "unknown",
+          error:
+            error instanceof Error ? error.message : "Aside status unavailable",
+        },
+      };
+    }
+  });
   fastify.get<{ Params: { id: string } }>(
     "/:id/handoff",
     async (request, reply) => {

@@ -16,6 +16,7 @@ import {
   MealConflict,
   mutateDocument,
   readDocument,
+  listDocuments,
   type MealDocument,
   canonical,
 } from "./store.js";
@@ -111,6 +112,13 @@ function required(current: BasketData | null): BasketData {
 export async function getBasket(prisma: PrismaClient, id: string) {
   const doc = await readDocument<BasketData>(prisma, id, "basket");
   return doc ? view(doc) : null;
+}
+export async function listBaskets(prisma: PrismaClient, selectionId?: string) {
+  return (await listDocuments<BasketData>(prisma, "basket"))
+    .filter(
+      (document) => !selectionId || document.data.selectionId === selectionId,
+    )
+    .map(view);
 }
 async function supermarketSelection(
   prisma: PrismaClient,
@@ -260,7 +268,9 @@ export async function createBasket(
         status: "draft",
         lines: selectionLines(shopping.selection),
         unresolved: [
-          "Choose products and review pack sizes and quantities before filling.",
+          (parsed.executor ?? "aside") === "aside"
+            ? "Shop with Aside to choose suitable products and pack sizes. Aside will ask about any unknown ingredient amounts."
+            : "Choose products and review pack sizes and quantities before filling.",
         ],
       }),
     }),
@@ -1027,7 +1037,7 @@ export async function openAsideBasket(
   if (process.env.PI_MEALS_ASIDE_LAUNCH_ENABLED !== "true")
     throw Object.assign(
       new Error(
-        "Aside launch is not enabled on this server. Open Aside and paste the exact shopping handoff; ask the server owner to enable attended launches.",
+        "Shopping with Aside is unavailable because agent launch is disabled on this server.",
       ),
       { statusCode: 503 },
     );
@@ -1064,9 +1074,16 @@ export async function openAsideBasket(
     throw new MealConflict(
       "The supermarket requirement changed. Create a new basket before opening Aside.",
     );
-  if (!basket.lines.length || basket.lines.some((line) => line.quantity <= 0))
+  if (
+    !basket.lines.length ||
+    basket.lines.some(
+      (line) => !Number.isFinite(line.quantity) || line.quantity < 0,
+    )
+  )
     throw Object.assign(
-      new Error("Resolve ingredient quantities before opening Aside."),
+      new Error(
+        "Add ingredients and resolve invalid quantities before opening Aside.",
+      ),
       { statusCode: 400 },
     );
   const taskId = `aside-attempt:${id}:${parsed.operationId}`,
@@ -1133,7 +1150,10 @@ export async function openAsideBasket(
       operationId: parsed.operationId,
       manifest: basket.lines,
       remoteTerminationUnknown: true,
-      effect: "aside_process_spawned",
+      effect:
+        process.processState === "failed"
+          ? "aside_launch_failed"
+          : "aside_process_spawned",
       attemptId: taskId,
       ...process,
       handoff,
@@ -1166,17 +1186,22 @@ export async function openAsideBasket(
     reduce: (current) => {
       const sessionId = (receipt as { sessionId?: string }).sessionId;
       const data = required(current);
+      const launchError = (receipt as { error?: string }).error;
       return {
         ...data,
         receipt,
         ...(sessionId ? { taskId: sessionId } : {}),
-        unresolved: sessionId
+        unresolved: launchError
           ? [
-              `Aside session ${sessionId} is recorded. Stop that session here, review the stopped trolley, then confirm it to finish shopping. Checkout stays manual.`,
+              `Aside could not start shopping: ${launchError}. Keep this attempt reserved until its session and trolley are checked.`,
             ]
-          : [
-              "Aside session identity was not captured. Do not launch again; inspect the existing task in Aside. The account stays reserved until its identity and stop state can be verified.",
-            ],
+          : sessionId
+            ? [
+                `Aside session ${sessionId} is recorded. Stop that session here, review the stopped trolley, then confirm it to finish shopping. Checkout stays manual.`,
+              ]
+            : [
+                "Aside session identity was not captured. Do not launch again; inspect the existing task in Aside. The account stays reserved until its identity and stop state can be verified.",
+              ],
       };
     },
   });

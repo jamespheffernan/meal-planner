@@ -8,7 +8,7 @@ import type { BasketProposal } from "./contracts.js";
 export function basketHandoff(basket: BasketProposal): string {
   return [
     `Pi Meals basket ${basket.id}; revision ${basket.revision}; selection ${basket.selectionId} revision ${basket.selectionRevision}.`,
-    "Fill the Ocado trolley for the exact ingredient quantities below. Where product IDs and pack sizes are reviewed, use those products and counts. Otherwise resolve product choices and explicit pack sizes in this attended session before adding anything. Stop for human review if a quantity or conversion is unknown. Do not substitute products, remove or reduce existing items, select a delivery slot, enter checkout, pay, or place an order.",
+    "Fill the Ocado trolley for the exact ingredient quantities below. Where product IDs and pack sizes are reviewed, use those products and counts. Otherwise choose suitable available Ocado products and pack sizes yourself. Prefer ordinary reasonably priced products that match the ingredient and dietary requirements; calculate the minimum whole packs covering the required quantity. Do not ask the user to choose every product or approve routine brand and pack-size decisions. Ask only about material unresolved quantities, dietary restrictions, or an unavailable ingredient requiring a recipe change. Proceed with known requirements. For a line with quantity:null or needsReview:true, do not invent an amount or add it yet; ask whether the household already has enough (especially unquantified salt or seasoning), or ask for the needed amount. Resolve only these material questions before writing that line. Do not substitute an explicitly reviewed product or a materially different ingredient, remove or reduce existing items, select a delivery slot, enter checkout, pay, or place an order.",
     "Read the complete trolley first. If it cannot be read reliably, stop. Record every existing product ID and quantity, including manual items. For each manifest product, add the stated number of packs to its baseline quantity. Record the baseline and intended target BEFORE each write. If a write is interrupted or uncertain, stop without retrying it or starting another executor.",
     "Read the complete trolley after changes. Return structured evidence with task/session ID, full baseline and final product IDs and quantities, each intended target, differences, and unresolved items. A written success claim is not verification.",
     JSON.stringify(
@@ -18,7 +18,11 @@ export function basketHandoff(basket: BasketProposal): string {
         shoppingCycleRevision: (
           basket as BasketProposal & { shoppingCycleRevision?: number }
         ).shoppingCycleRevision,
-        lines: basket.lines,
+        lines: basket.lines.map((line) =>
+          line.quantity === 0
+            ? { ...line, quantity: null, needsReview: true }
+            : line,
+        ),
       },
       null,
       2,
@@ -128,6 +132,17 @@ export async function stopAndInspectAsideSession(
     evidence: { source: "aside-session-list", row: after.row },
   };
 }
+type AsideProcessObservation = {
+  processState: "started" | "finished" | "failed";
+  exitCode?: number;
+  error?: string;
+};
+const processObservations = new Map<string, AsideProcessObservation>();
+export function inspectAsideProcess(
+  logPath: string,
+): AsideProcessObservation | undefined {
+  return processObservations.get(logPath);
+}
 /** Capture the actual CLI creation line; a PID alone never proves a remote task identity. */
 export async function launchAsideAttempt(
   text: string,
@@ -137,6 +152,9 @@ export async function launchAsideAttempt(
   logPath: string;
   sessionId?: string;
   sessionIdentity: "captured" | "unknown";
+  processState: "started" | "finished" | "failed";
+  exitCode?: number;
+  error?: string;
 }> {
   const directory =
     process.env.PI_MEALS_ASIDE_LOG_DIR ?? path.resolve("work/pi-meals-aside");
@@ -151,9 +169,13 @@ export async function launchAsideAttempt(
     ["exec", text],
     { shell: false, stdio: ["ignore", "pipe", "pipe"] },
   );
+  processObservations.set(logPath, { processState: "started" });
   let bytes = 0,
     identityOutput = "",
     identitySettled = false;
+  let exitCode: number | undefined,
+    processError: string | undefined,
+    stderrOutput = "";
   let resolveIdentity!: (sessionId: string | undefined) => void;
   const identity = new Promise<string | undefined>((resolve) => {
     resolveIdentity = resolve;
@@ -188,7 +210,24 @@ export async function launchAsideAttempt(
       if (id) finishIdentity(id);
     }
   });
-  child.stderr?.on("data", capture);
+  child.stderr?.on("data", (chunk: Buffer) => {
+    capture(chunk);
+    stderrOutput = (stderrOutput + chunk.toString("utf8")).slice(0, 4096);
+    if (!identitySettled) {
+      identityOutput = (identityOutput + chunk.toString("utf8")).slice(
+        0,
+        16384,
+      );
+      const last = Math.max(
+        identityOutput.lastIndexOf("\n"),
+        identityOutput.lastIndexOf("\r"),
+      );
+      if (last >= 0) {
+        const id = extractAsideSessionId(identityOutput.slice(0, last + 1));
+        if (id) finishIdentity(id);
+      }
+    }
+  });
   const timer = setTimeout(
     () => {
       child.kill("SIGTERM");
@@ -196,13 +235,25 @@ export async function launchAsideAttempt(
     10 * 60 * 1000,
   );
   timer.unref();
-  child.once("close", () => {
+  child.once("close", (code: number | null, signal: string | null) => {
+    if (code !== null) exitCode = code;
+    if (code !== 0)
+      processError = `Aside CLI exited ${code ?? signal ?? "unexpectedly"}${stderrOutput.trim() ? `: ${stripAsideAnsi(stderrOutput).trim()}` : ""}`;
+    processObservations.set(logPath, {
+      processState: processError ? "failed" : "finished",
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(processError ? { error: processError } : {}),
+    });
     clearTimeout(timer);
     finishIdentity();
     void log.close();
   });
   return new Promise((resolve, reject) => {
     child.once("error", (error) => {
+      processObservations.set(logPath, {
+        processState: "failed",
+        error: error.message,
+      });
       clearTimeout(timer);
       finishIdentity();
       void log.close();
@@ -220,6 +271,13 @@ export async function launchAsideAttempt(
         logPath,
         ...(sessionId ? { sessionId } : {}),
         sessionIdentity: sessionId ? "captured" : "unknown",
+        processState: processError
+          ? "failed"
+          : exitCode === 0
+            ? "finished"
+            : "started",
+        ...(exitCode !== undefined ? { exitCode } : {}),
+        ...(processError ? { error: processError } : {}),
       });
     });
   });

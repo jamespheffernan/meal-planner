@@ -74,6 +74,11 @@ export interface RecipeDraft {
     quote: string;
   }>;
 }
+export interface AsideRecipeTab {
+  targetId: string;
+  title: string;
+  url: string;
+}
 export interface BasketManifestLine {
   id: string;
   name: string;
@@ -98,6 +103,7 @@ export interface BasketProposal {
   unresolved: string[];
   taskId?: string;
   receipt?: unknown;
+  asideSession?: { sessionId?: string; status: string; error?: string };
 }
 
 import type { Recipe } from "./api";
@@ -137,6 +143,26 @@ export async function mealsRequest<T>(
 export const operationId = () => crypto.randomUUID();
 export const mealsApi = {
   drafts: () => mealsRequest<RecipeDraft[]>("/pi-meals/intake"),
+  asideTabs: () =>
+    mealsRequest<{ tabs: AsideRecipeTab[] }>("/pi-meals/intake/aside-tabs"),
+  importAside: (urls: string[]) =>
+    mealsRequest<{
+      drafts: RecipeDraft[];
+      failures: Array<{ url: string; message: string }>;
+    }>("/pi-meals/intake/from-aside", "POST", {
+      operationId: operationId(),
+      urls,
+    }),
+  baskets: async (selectionId: string) =>
+    (
+      await mealsRequest<{ baskets: BasketProposal[] }>(
+        `/pi-meals/baskets?selectionId=${encodeURIComponent(selectionId)}`,
+      )
+    ).baskets,
+  getBasket: (basketId: string) =>
+    mealsRequest<BasketProposal>(
+      `/pi-meals/baskets/${encodeURIComponent(basketId)}`,
+    ),
   logout: () => mealsRequest("/pi-meals/auth/logout", "POST"),
   session: () =>
     mealsRequest<{ actorId: string; name: string }>("/pi-meals/auth/session"),

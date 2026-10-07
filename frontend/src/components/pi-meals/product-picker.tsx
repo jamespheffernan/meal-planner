@@ -29,6 +29,8 @@ export function ProductPicker({
         sessionId?: string;
         reviewToken?: string;
         sessionStopped?: { status: string };
+        processState?: string;
+        error?: string;
       }
     | undefined;
   const locked =
@@ -43,6 +45,105 @@ export function ProductPicker({
     } finally {
       setBusy(false);
     }
+  }
+  if (basket.executor === "aside") {
+    const stopped =
+      !!asideReceipt?.reviewToken &&
+      asideReceipt.sessionStopped?.status === "idle";
+    const finished = basket.status === "complete";
+    return (
+      <div className={styles.picker}>
+        <h3>
+          {finished
+            ? "Your trolley is ready for checkout"
+            : stopped
+              ? "Review your Ocado trolley"
+              : asideReceipt?.sessionId
+                ? "Shopping task opened in Aside"
+                : "Start your Ocado shop"}
+        </h3>
+        <p>
+          {finished
+            ? "You’ve confirmed the trolley. Choose your delivery slot and place the order in Ocado."
+            : stopped
+              ? "Aside is stopped. Check the products, quantities and any items already in your trolley, then confirm below."
+              : "Aside has the remaining ingredient quantities and will choose suitable products and pack sizes. Follow its shopping task in Aside; you can return here at any time."}
+        </p>
+        {basket.asideSession && !finished && !stopped && (
+          <p role="status">
+            {basket.asideSession.status === "idle"
+              ? "Aside has finished its current turn. Check its result, then review the trolley."
+              : basket.asideSession.status === "running"
+                ? "Aside is working on your shop."
+                : `Aside status: ${basket.asideSession.status}`}
+          </p>
+        )}
+        {(error || asideReceipt?.error || basket.asideSession?.error) && (
+          <p role="alert" className={styles.error}>
+            {error || asideReceipt?.error || basket.asideSession?.error}
+          </p>
+        )}
+        {!asideReceipt?.sessionId && basket.receipt != null && (
+          <p role="alert">
+            The launch needs checking before another task can start. Your
+            shopping list is saved.
+          </p>
+        )}
+        <div className={styles.actions}>
+          {!basket.receipt && (
+            <button
+              disabled={locked}
+              onClick={() => void action(() => productsApi.aside(basket))}
+            >
+              {busy ? "Opening Aside…" : "Shop with Aside"}
+            </button>
+          )}
+          {!!asideReceipt?.sessionId && !finished && !stopped && (
+            <button
+              disabled={disabled || busy}
+              onClick={() => void action(() => productsApi.stopAside(basket))}
+            >
+              {busy ? "Stopping…" : "Stop shopping & review trolley"}
+            </button>
+          )}
+          {(stopped || finished) && (
+            <a
+              href="https://www.ocado.com/webshop/trolley/trolley.do"
+              target="_blank"
+              rel="noreferrer"
+            >
+              {finished
+                ? "Open Ocado to place your order ↗"
+                : "Open Ocado trolley ↗"}
+            </a>
+          )}
+          {stopped && !finished && (
+            <button
+              disabled={disabled || busy}
+              onClick={() =>
+                void action(() => productsApi.completeAside(basket))
+              }
+            >
+              I’ve checked the trolley
+            </button>
+          )}
+          {!finished && (
+            <button
+              disabled={disabled || busy}
+              onClick={() => void action(() => mealsApi.getBasket(basket.id))}
+            >
+              Refresh task status
+            </button>
+          )}
+        </div>
+        {!finished && (
+          <p className={styles.hint}>
+            Your task and shopping list are saved. Placing the order stays with
+            you.
+          </p>
+        )}
+      </div>
+    );
   }
   return (
     <div className={styles.picker}>
@@ -81,75 +182,16 @@ export function ProductPicker({
           {busy ? "Working…" : "Save product choices"}
         </button>
         <button
-          disabled={locked}
+          disabled={
+            locked ||
+            basket.status !== "ready" ||
+            JSON.stringify(lines) !== JSON.stringify(basket.lines)
+          }
           onClick={() => void action(() => productsApi.aside(basket))}
         >
-          Continue in Aside
+          Use these choices in Aside
         </button>
       </div>
-      {basket.executor === "aside" &&
-        basket.status === "needs_review" &&
-        asideReceipt?.sessionId && (
-          <div className={styles.choice}>
-            {asideReceipt.reviewToken &&
-            asideReceipt.sessionStopped?.status === "idle" ? (
-              <>
-                <p>
-                  The recorded Aside task is stopped. Open the Ocado trolley and
-                  check the selected products, quantities, and existing manual
-                  items. Then confirm your review below.
-                </p>
-                <a
-                  href="https://www.ocado.com/webshop/trolley/trolley.do"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Review the stopped Ocado trolley ↗
-                </a>
-                <p>
-                  <button
-                    disabled={disabled || busy}
-                    onClick={() =>
-                      void action(() => productsApi.completeAside(basket))
-                    }
-                  >
-                    I reviewed the stopped trolley; finish shopping
-                  </button>
-                </p>
-              </>
-            ) : (
-              <>
-                <p>
-                  Stop the recorded Aside task first so it cannot keep adding
-                  items during your review. Then check the stopped trolley and
-                  confirm it here. Checkout stays manual.
-                </p>
-                <button
-                  disabled={disabled || busy}
-                  onClick={() =>
-                    void action(() => productsApi.stopAside(basket))
-                  }
-                >
-                  Stop Aside, then review trolley
-                </button>
-              </>
-            )}
-          </div>
-        )}
-      {basket.status === "complete" &&
-        (basket.receipt as { verification?: string } | undefined)
-          ?.verification === "user" && (
-          <p role="status" className={styles.hint}>
-            Shopping finished after your trolley review. The recorded Aside task
-            is stopped. This receipt records your confirmation; checkout stays
-            manual.
-          </p>
-        )}
-      <p className={styles.hint}>
-        Continue in Aside opens an attended shopping task with these exact
-        ingredient quantities. Review its product choices and actual trolley.
-        Checkout stays manual.
-      </p>
     </div>
   );
 }
