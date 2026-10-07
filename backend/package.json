@@ -5,9 +5,9 @@
   "description": "Meal planner API with Fastify and Prisma",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "node --env-file-if-exists=.env --import tsx --watch src/index.ts",
+    "build": "tsc && node scripts/copy-runtime-assets.mjs",
+    "start": "node --env-file-if-exists=.env dist/index.js",
     "start:prod": "prisma db push && node dist/index.js",
     "bot": "tsx src/bot/index.ts",
     "cli": "tsx src/cli/index.ts",

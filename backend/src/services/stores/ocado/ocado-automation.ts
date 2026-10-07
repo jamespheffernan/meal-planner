@@ -192,6 +192,7 @@ export class OcadoAutomation {
 
       const browser = await chromium.launch({
         headless,
+        channel: process.env.OCADO_BROWSER_CHANNEL || undefined,
         // Avoid obvious automation flags where possible.
         args: ['--disable-blink-features=AutomationControlled'],
       })

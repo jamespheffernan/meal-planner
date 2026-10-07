@@ -11,7 +11,7 @@ import time
 from urllib.parse import urlsplit, urlunsplit
 import re
 
-DEFAULT_SWEEPER = '/Users/jamesheffernan/GitHub/General Knowledge Work/projects/manon-chat-sweeper/pilot.py'
+DEFAULT_SWEEPER = str(Path.home() / 'GitHub/General Knowledge Work/projects/manon-chat-sweeper/pilot.py')
 
 
 def validate_url(value):
@@ -58,7 +58,7 @@ def inspect(value):
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             raise module.PilotError('Extraction tool unavailable or timed out: ' + Path(argv[0]).name) from exc
     module.run_command = bounded_command
-    root = Path(os.environ.get('PI_MEALS_WORK_DIR', '/Volumes/4TB Private/Offloaded/Agent Work/pi-meals-20261007/instagram-work'))
+    root = Path(os.environ.get('PI_MEALS_WORK_DIR', '/Volumes/4TB Private/Offloaded/Agent Work/pi-meals/instagram-work'))
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='single-link-', dir=root) as folder:
         result = module.inspect_instagram_url(url, Path(folder), None, download_media=True)

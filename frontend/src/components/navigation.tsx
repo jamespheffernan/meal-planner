@@ -1,6 +1,54 @@
-'use client'
-import Link from 'next/link'
-import { usePathname } from 'next/navigation'
-import { ChefHat, Calendar, BookOpen, Compass, ShoppingBasket, Settings } from 'lucide-react'
-const items=[{href:'/shop-recipes',label:'Shop these recipes',icon:ShoppingBasket},{href:'/meal-plan',label:'Our week',icon:Calendar},{href:'/recipes',label:'Recipe library',icon:BookOpen},{href:'/discover',label:'Discover',icon:Compass}]
-export function Navigation(){const pathname=usePathname();return <nav className="bg-white border-b border-stone-200"><div className="container mx-auto px-4"><div className="flex flex-wrap items-center justify-between gap-3 py-4"><Link href="/" className="flex items-center gap-2 text-xl font-semibold text-emerald-950"><ChefHat className="w-6 h-6"/>Pi Meals</Link><div className="flex flex-wrap items-center gap-1">{items.map(({href,label,icon:Icon})=><Link key={href} href={href} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium ${pathname===href?'bg-emerald-900 text-white':'text-stone-600 hover:bg-stone-100'}`}><Icon className="w-4 h-4"/><span>{label}</span></Link>)}<Link href="/settings" aria-label="Settings" className="p-2 text-stone-500"><Settings className="w-4 h-4"/></Link></div></div></div></nav>}
+"use client";
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import {
+  ChefHat,
+  Calendar,
+  BookOpen,
+  Compass,
+  ShoppingBasket,
+  Settings,
+} from "lucide-react";
+const items = [
+  { href: "/shop-recipes", label: "Shop these recipes", icon: ShoppingBasket },
+  { href: "/our-week", label: "Our week", icon: Calendar },
+  { href: "/recipes", label: "Recipe library", icon: BookOpen },
+  { href: "/discover", label: "Discover", icon: Compass },
+];
+export function Navigation() {
+  const pathname = usePathname();
+  return (
+    <nav className="bg-white border-b border-stone-200">
+      <div className="container mx-auto px-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 py-4">
+          <Link
+            href="/"
+            className="flex items-center gap-2 text-xl font-semibold text-emerald-950"
+          >
+            <ChefHat className="w-6 h-6" />
+            Pi Meals
+          </Link>
+          <div className="flex flex-wrap items-center gap-1">
+            {items.map(({ href, label, icon: Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium ${pathname === href ? "bg-emerald-900 text-white" : "text-stone-600 hover:bg-stone-100"}`}
+              >
+                <Icon className="w-4 h-4" />
+                <span>{label}</span>
+              </Link>
+            ))}
+            <Link
+              href="/settings"
+              aria-label="Settings"
+              className="p-2 text-stone-500"
+            >
+              <Settings className="w-4 h-4" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}

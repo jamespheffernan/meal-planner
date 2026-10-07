@@ -11,6 +11,7 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
   }
 
   const res = await fetch(`${API_URL}${endpoint}`, {
+    credentials: 'include',
     ...options,
     headers,
   })

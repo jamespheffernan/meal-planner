@@ -1,0 +1,151 @@
+.main {
+  max-width: 1080px;
+  margin: auto;
+  padding: 32px 20px 80px;
+  color: #17372a;
+}
+.main h1 {
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 1.1;
+  margin: 12px 0;
+}
+.eyebrow {
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+}
+.card {
+  background: #fff;
+  border: 1px solid #d8e3d9;
+  border-radius: 18px;
+  padding: 22px;
+  margin-top: 22px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.main label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.main select,
+.main input:not([type="checkbox"]) {
+  border: 1px solid #abbcaf;
+  border-radius: 8px;
+  padding: 10px;
+  max-width: 100%;
+  background: #fff;
+  color: #17372a;
+}
+.main button {
+  border: 1px solid #17372a;
+  background: #17372a;
+  color: #fff;
+  border-radius: 9px;
+  padding: 11px 16px;
+  cursor: pointer;
+  min-height: 44px;
+}
+.main button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.main a {
+  text-decoration: underline;
+}
+.main p {
+  line-height: 1.6;
+}
+.alert {
+  padding: 16px;
+  background: #fff2d1;
+  border: 1px solid #d4ac56;
+  border-radius: 10px;
+}
+.batches {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  margin-top: 20px;
+}
+.batch {
+  border: 1px solid #d8e3d9;
+  border-radius: 12px;
+  padding: 16px;
+}
+.batch img {
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+.batch label {
+  margin-top: 14px;
+}
+.lunch {
+  border-top: 1px solid #d8e3d9;
+  padding: 18px 0;
+}
+.lunch input[type="number"] {
+  width: 80px;
+}
+.badge {
+  margin-left: 12px;
+  font-size: 0.8rem;
+  background: #edf1e7;
+  border-radius: 20px;
+  padding: 5px 10px;
+}
+.lunch .row {
+  margin-top: 12px;
+}
+@media (max-width: 600px) {
+  .main {
+    padding: 22px 12px;
+  }
+  .card {
+    padding: 16px;
+  }
+  .row {
+    align-items: stretch;
+  }
+  .row > label {
+    width: 100%;
+  }
+  .main select {
+    flex: 1;
+    min-width: 0;
+  }
+  .badge {
+    display: inline-block;
+  }
+  .batches {
+    grid-template-columns: 1fr;
+  }
+}
+
+.main button[aria-pressed="true"] {
+  background: #e5efdc;
+  color: #17372a;
+}
+.main :is(button, input, select, a, summary):focus-visible {
+  outline: 3px solid #b47024;
+  outline-offset: 3px;
+}
+.batch details {
+  margin-top: 16px;
+}
+.batch summary {
+  cursor: pointer;
+  min-height: 44px;
+  padding-top: 10px;
+}
+.batch li {
+  margin-block: 8px;
+  line-height: 1.5;
+}
