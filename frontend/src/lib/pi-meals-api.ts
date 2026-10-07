@@ -165,7 +165,9 @@ export const mealsApi = {
     ),
   logout: () => mealsRequest("/pi-meals/auth/logout", "POST"),
   session: () =>
-    mealsRequest<{ actorId: string; name: string }>("/pi-meals/auth/session"),
+    mealsRequest<{ actorId: string; name: string; requiresLogin?: boolean }>(
+      "/pi-meals/auth/session",
+    ),
   login: (member: string, pin: string) =>
     mealsRequest("/pi-meals/auth/login", "POST", { member, pin }),
   library: async () => {

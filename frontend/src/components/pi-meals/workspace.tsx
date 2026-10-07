@@ -70,6 +70,7 @@ export function MealsWorkspace() {
     [serverHandoff, setServerHandoff] = useState(""),
     [handoffError, setHandoffError] = useState("");
   const [signedInName, setSignedInName] = useState("");
+  const [requiresLogin, setRequiresLogin] = useState(true);
   const [undoStock, setUndoStock] = useState<{
     selectionId: string;
     revision: number;
@@ -100,6 +101,7 @@ export function MealsWorkspace() {
   const load = useCallback(async () => {
     const memberSession = await mealsApi.session();
     setSignedInName(memberSession.name);
+    setRequiresLogin(memberSession.requiresLogin !== false);
     setLogin(false);
     void mealsApi
       .assistantStatus()
@@ -562,22 +564,28 @@ export function MealsWorkspace() {
                 New shop
               </button>
               <div className={styles.account}>
-                <span>Signed in as {signedInName}</span>
-                <button
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      await saveCachedShopping(null);
-                      await mealsApi.logout();
-                      setLogin(true);
-                      setSelection(null);
-                      setBasket(null);
-                      setDrafts([]);
-                    })
-                  }
-                >
-                  Sign out & clear offline list
-                </button>
+                <span>
+                  {requiresLogin
+                    ? `Signed in as ${signedInName}`
+                    : "Shared kitchen"}
+                </span>
+                {requiresLogin && (
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        await saveCachedShopping(null);
+                        await mealsApi.logout();
+                        setLogin(true);
+                        setSelection(null);
+                        setBasket(null);
+                        setDrafts([]);
+                      })
+                    }
+                  >
+                    Sign out & clear offline list
+                  </button>
+                )}
               </div>
             </div>
           </details>
@@ -610,7 +618,7 @@ export function MealsWorkspace() {
         >
           <h2>Welcome to your kitchen</h2>
           <label>
-            Who is cooking?{" "}
+            Household member{" "}
             <select value={member} onChange={(e) => setMember(e.target.value)}>
               <option>James</option>
               <option>Manon</option>

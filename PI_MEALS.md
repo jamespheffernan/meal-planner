@@ -10,6 +10,8 @@ Every import is stored as a shared PostgreSQL draft, including incomplete Instag
 
 Use Node 26, PostgreSQL, Python 3 and the existing authorised Pi installation. Python's Unix file lock gives one runtime owner; this build targets macOS/Linux. Mount persistent storage before starting. Configure the backend from `.env.example`; keep credentials out of Git. The assistant uses the installed Pi credential store through its SDK. It does not copy OAuth tokens.
 
+Set `PI_MEALS_REQUIRE_LOGIN=false` on the trusted household host to open directly into the shared kitchen. This mode needs no member selection or PIN and records new changes as household activity. Existing recipes, plans and history remain available. With login enabled, member identity identifies the planner's user; it does not assign cooking responsibility.
+
 1. Back up the existing database. For a trial, restore that backup into a **separate database** and point `backend/.env` at it.
 2. Install the locked dependencies with `npm ci` in `backend` and `frontend`.
 3. Generate Prisma with `npm run db:generate` in `backend`. For an existing Meal Planner database, apply `backend/prisma/migrations/20261007140000_pi_meals/migration.sql` once with `prisma db execute`. A fresh empty database needs the full Prisma schema first. Do not run a reset against household data.

@@ -29,6 +29,7 @@ beforeEach(async () => {
   vi.stubEnv("PI_MEALS_JAMES_PIN", "fake-james");
   vi.stubEnv("PI_MEALS_MANON_PIN", "fake-manon");
   vi.stubEnv("PI_MEALS_AUTH_DISABLED", "");
+  vi.stubEnv("PI_MEALS_REQUIRE_LOGIN", "true");
   vi.stubEnv("PI_MEALS_ALLOWED_ORIGINS", "http://localhost:3100");
   vi.stubEnv("PI_MEALS_SECURE_COOKIE", "true");
   ip = `192.0.2.${counter++}`;
@@ -43,6 +44,45 @@ beforeEach(async () => {
 afterEach(async () => {
   await app.close();
   vi.unstubAllEnvs();
+});
+it("opens the shared kitchen without cookies or configured PINs, using household attribution", async () => {
+  vi.stubEnv("PI_MEALS_REQUIRE_LOGIN", "false");
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("PI_MEALS_SESSION_SECRET", "");
+  vi.stubEnv("PI_MEALS_JAMES_PIN", "");
+  const session = await app.inject({ url: "/api/pi-meals/auth/session" });
+  expect(session.statusCode).toBe(200);
+  expect(session.json()).toEqual({
+    actorId: "household",
+    name: "Shared kitchen",
+    requiresLogin: false,
+  });
+  const recipes = await app.inject({
+    url: "/api/legacy/recipes",
+    headers: { cookie: signed("james", Date.now() + 60000) },
+  });
+  expect(recipes.json()).toEqual({ actor: "household" });
+});
+it("retains mutation origin checks when sign-in is disabled", async () => {
+  vi.stubEnv("PI_MEALS_REQUIRE_LOGIN", "false");
+  expect(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/api/legacy/order",
+        headers: { origin: "https://unrelated.example" },
+      })
+    ).statusCode,
+  ).toBe(403);
+  expect(
+    (
+      await app.inject({
+        method: "POST",
+        url: "/api/legacy/order",
+        headers: { origin: "http://localhost:3100" },
+      })
+    ).statusCode,
+  ).toBe(200);
 });
 it.each([
   ["James", "fake-james", "james"],

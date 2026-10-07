@@ -9,6 +9,9 @@ declare module "fastify" {
 const COOKIE = "pi_meals_session";
 const MAX_AGE = 60 * 60 * 24 * 14;
 const attempts = new Map<string, { count: number; until: number }>();
+function requiresLogin(): boolean {
+  return process.env.PI_MEALS_REQUIRE_LOGIN !== "false";
+}
 function secret(): string {
   return process.env.PI_MEALS_SESSION_SECRET || "";
 }
@@ -71,7 +74,9 @@ export async function installMealAuth(app: FastifyInstance) {
       request.mealActorId = "james";
       return;
     }
-    request.mealActorId = authenticated(request);
+    request.mealActorId = requiresLogin()
+      ? authenticated(request)
+      : "household";
     if (!request.mealActorId)
       return reply
         .code(401)
@@ -95,7 +100,16 @@ export async function installMealAuth(app: FastifyInstance) {
   });
   app.get("/api/pi-meals/auth/session", async (request) => {
     const actorId = getMealActorId(request);
-    return { actorId, name: actorId === "james" ? "James" : "Manon" };
+    return {
+      actorId,
+      name:
+        actorId === "household"
+          ? "Shared kitchen"
+          : actorId === "james"
+            ? "James"
+            : "Manon",
+      requiresLogin: requiresLogin(),
+    };
   });
   app.post<{ Body: { member?: string; pin?: string } }>(
     "/api/pi-meals/auth/login",
