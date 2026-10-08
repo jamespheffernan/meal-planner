@@ -61,6 +61,7 @@ export interface RecipeDraft {
   revision: number;
   name: string;
   source: string;
+  photoUrl?: string;
   servings: number | null;
   ingredients: RecipeIngredientInput[];
   instructions: string[];
@@ -316,6 +317,7 @@ export function draftSnapshot(draft: RecipeDraft): SelectionItem {
     recipeId: draft.recipeId,
     name: draft.name,
     source: draft.source,
+    photoUrl: draft.photoUrl,
     baseServings: draft.servings,
     servings: draft.servings,
     ingredients: structuredClone(draft.ingredients),

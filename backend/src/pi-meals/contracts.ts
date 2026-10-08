@@ -61,6 +61,7 @@ export interface RecipeDraft {
   revision: number;
   name: string;
   source: string;
+  photoUrl?: string;
   servings: number | null;
   ingredients: RecipeIngredientInput[];
   instructions: string[];

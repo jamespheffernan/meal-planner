@@ -718,6 +718,7 @@ export async function createDraft(
   let extracted: RecipeDraft | undefined;
   if (refresh) {
     let evidence = supplied;
+    let photoUrl: string | undefined;
     const gaps: string[] = [];
     if (!evidence.length && source) {
       if (
@@ -730,10 +731,13 @@ export async function createDraft(
         gaps.push(...result.gaps);
       } else {
         try {
-          evidence =
-            new URL(source).hostname === "cooking.nytimes.com"
-              ? await captureAsideRecipe(source)
-              : recipeEvidenceFromHtml(await fetchRecipePage(source));
+          if (new URL(source).hostname === "cooking.nytimes.com") {
+            const captured = await captureAsideRecipe(source);
+            evidence = captured.evidence;
+            photoUrl = captured.photoUrl;
+          } else {
+            evidence = recipeEvidenceFromHtml(await fetchRecipePage(source));
+          }
         } catch (error) {
           gaps.push(
             error instanceof Error
@@ -744,6 +748,8 @@ export async function createDraft(
       }
     }
     extracted = extractDraft(id, source, evidence, gaps);
+    if (photoUrl || existing?.data.photoUrl)
+      extracted.photoUrl = photoUrl ?? existing?.data.photoUrl;
     if (
       !extracted.ingredients.length &&
       evidence.some((line) =>
@@ -961,6 +967,7 @@ export async function saveDraft(
           id: recipeId,
           name: draft.name,
           source: draft.source || null,
+          photoUrl: draft.photoUrl || null,
           servings: draft.servings!,
           cookTimeMinutes: 0,
           mealType: "lunch",

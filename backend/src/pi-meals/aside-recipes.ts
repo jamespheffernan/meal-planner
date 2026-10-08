@@ -132,9 +132,26 @@ export function recipeSnapshotEvidence(tree: string): EvidenceLine[] {
     throw new AsideRecipeError("NYT recipe evidence exceeds 128 KB.");
   return [{ source: "page", text: relevant }];
 }
+export function nytRecipePhotoUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 4000) return undefined;
+  try {
+    const url = new URL(value);
+    if (
+      url.protocol !== "https:" ||
+      url.hostname !== "static01.nyt.com" ||
+      url.username ||
+      url.password ||
+      url.port
+    )
+      return undefined;
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
 export async function captureAsideRecipe(
   value: string,
-): Promise<EvidenceLine[]> {
+): Promise<{ evidence: EvidenceLine[]; photoUrl?: string }> {
   const url = nytRecipeUrl(value);
   const id = nytRecipeIdentity(url);
   const result = await runAside(
@@ -147,16 +164,29 @@ export async function captureAsideRecipe(
       if (match) { await attachBrowserTab(match.targetId); target = page; } else { target = await openTab(wanted); owned = true; }
       await snapshot(target, {interactive:true});
       const state = await snapshot(target);
-      console.log(${JSON.stringify(marker)} + JSON.stringify({url:target.url(),tree:state.tree}));
+      let photoUrl;
+      if (identity(target.url()) === ${JSON.stringify(id)}) {
+        try {
+          photoUrl = await target.evaluate(() => document.querySelector('meta[property="og:image"]')?.getAttribute('content') || document.querySelector('meta[name="twitter:image"]')?.getAttribute('content'));
+        } catch { /* An optional photo must never prevent text capture. */ }
+      }
+      console.log(${JSON.stringify(marker)} + JSON.stringify({url:target.url(),tree:state.tree,photoUrl}));
     } finally { if (owned && target) await closeTab(target); }
   })();`,
   );
   const captured = z
-    .object({ url: z.string().max(4000), tree: z.string().max(1_500_000) })
+    .object({
+      url: z.string().max(4000),
+      tree: z.string().max(1_500_000),
+      photoUrl: z.unknown().optional(),
+    })
     .parse(result);
   if (nytRecipeIdentity(captured.url) !== id)
     throw new AsideRecipeError(
       "Aside opened a different recipe or sign-in page. Open the requested recipe in Aside and retry.",
     );
-  return recipeSnapshotEvidence(captured.tree);
+  return {
+    evidence: recipeSnapshotEvidence(captured.tree),
+    photoUrl: nytRecipePhotoUrl(captured.photoUrl),
+  };
 }

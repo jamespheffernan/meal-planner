@@ -248,16 +248,20 @@ describe("persisted recipe intake", () => {
     expect(store.client.recipe.create).not.toHaveBeenCalled();
   });
   it("captures NYT automatically, persists evidence and deduplicates recipe identity without recapture", async () => {
-    vi.mocked(captureAsideRecipe).mockResolvedValueOnce([
-      { source: "page", text: recipe },
-    ]);
+    const photoUrl = "https://static01.nyt.com/images/2026/10/08/dining/soup/soup.jpg";
+    vi.mocked(captureAsideRecipe).mockResolvedValueOnce({
+      evidence: [{ source: "page", text: recipe }],
+      photoUrl,
+    });
     const store = memoryStore();
     const url = "https://cooking.nytimes.com/recipes/123-soup";
     const input = { operationId: "automatic", url };
     const draft = await createDraft(store.prisma, "actor", input);
     expect(draft.status).toBe("ready");
     expect(draft.source).toBe(url);
+    expect(draft.photoUrl).toBe(photoUrl);
     expect(store.documents.get(draft.id).data.evidence).toEqual(draft.evidence);
+    expect(store.documents.get(draft.id).data.photoUrl).toBe(photoUrl);
     expect(await createDraft(store.prisma, "actor", input)).toEqual(draft);
     const calls = vi.mocked(captureAsideRecipe).mock.calls.length;
     expect(
@@ -267,6 +271,18 @@ describe("persisted recipe intake", () => {
       }),
     ).toEqual(draft);
     expect(vi.mocked(captureAsideRecipe).mock.calls.length).toBe(calls);
+    const edited = await patchDraft(store.prisma, "actor", draft.id, {
+      operationId: "edit-photo-recipe",
+      expectedRevision: draft.revision,
+      draft: { name: "Our soup" },
+    });
+    expect(edited.photoUrl).toBe(photoUrl);
+    const saved = await saveDraft(store.prisma, "actor", draft.id, {
+      operationId: "save-photo-recipe",
+      expectedRevision: edited.revision,
+    });
+    expect(saved.photoUrl).toBe(photoUrl);
+    expect(store.recipes.get(saved.recipeId!)?.photoUrl).toBe(photoUrl);
   });
   it("reuses an edited legacy URL-hash NYT draft for another slug and replays its original receipt", async () => {
     const store = memoryStore();
