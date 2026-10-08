@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><meta name="theme-color" content="#e9f1e5" /><title>
+    Market list · Pi Meals</title
+  ><style>
+    body {
+      max-width: 680px;
+      margin: auto;
+      padding: 20px;
+      font: 17px system-ui;
+      background: #f8faf6;
+      color: #223229;
+    }
+    article {
+      border-top: 1px solid #c9d7c6;
+      padding: 15px 0;
+    }
+    button,
+    input {
+      font: inherit;
+      padding: 10px;
+      min-height: 44px;
+      box-sizing: border-box;
+      border: 1px solid #acbdac;
+      border-radius: 8px;
+    }
+    button {
+      background: #e9f1e5;
+      cursor: pointer;
+      margin: 5px;
+    }
+    input {
+      width: 110px;
+    }
+    small {
+      display: block;
+      margin: 8px 0;
+    }
+    a {
+      color: #225c38;
+    }
+    .warning {
+      color: #9c4228;
+    }
+    #status {
+      padding: 10px;
+      background: #fff2cf;
+    }
+  </style>
+  <h1>Your saved shopping list</h1>
+  <p>
+    This device stores household data for offline use. Clear the list before
+    sharing the device.
+  </p>
+  <a href="/shop-recipes">Return to recipes</a>
+  <p>
+    <button id="sync">Sync purchases</button
+    ><button id="clear">Clear saved list and unsent purchases</button>
+  </p>
+  <p id="status" role="status">Loading saved list…</p>
+  <main id="list"></main>
+  <script>
+    "use strict";
+    let state = null,
+      busy = false;
+    const status = document.querySelector("#status"),
+      list = document.querySelector("#list");
+    function db() {
+      return new Promise((resolve, reject) => {
+        const r = indexedDB.open("pi-meals-market-v1", 1);
+        r.onupgradeneeded = () => r.result.createObjectStore("shopping");
+        r.onsuccess = () => resolve(r.result);
+        r.onerror = () => reject(r.error);
+      });
+    }
+    async function read() {
+      const d = await db();
+      return new Promise((resolve, reject) => {
+        const t = d.transaction("shopping"),
+          r = t.objectStore("shopping").get("current");
+        r.onsuccess = () => resolve(r.result || null);
+        r.onerror = () => reject(r.error);
+        t.oncomplete = () => d.close();
+      });
+    }
+    async function write(v) {
+      const d = await db();
+      await new Promise((resolve, reject) => {
+        const t = d.transaction("shopping", "readwrite");
+        if (v) t.objectStore("shopping").put(v, "current");
+        else t.objectStore("shopping").delete("current");
+        t.oncomplete = resolve;
+        t.onerror = () => reject(t.error);
+      });
+      d.close();
+    }
+    async function update(change) {
+      const d = await db();
+      return new Promise((resolve, reject) => {
+        const t = d.transaction("shopping", "readwrite"),
+          store = t.objectStore("shopping"),
+          r = store.get("current");
+        let result;
+        r.onsuccess = () => {
+          try {
+            result = change(r.result || null);
+            store.put(result, "current");
+          } catch (e) {
+            t.abort();
+            reject(e);
+          }
+        };
+        t.oncomplete = () => {
+          d.close();
+          resolve(result);
+        };
+        t.onerror = () => {
+          d.close();
+          reject(t.error);
+        };
+      });
+    }
+    function node(tag, text, parent) {
+      const el = document.createElement(tag);
+      if (text !== undefined) el.textContent = text;
+      if (parent) parent.append(el);
+      return el;
+    }
+    function render() {
+      list.replaceChildren();
+      if (!state) {
+        status.textContent =
+          "No saved list. Open a recipe selection online first.";
+        return;
+      }
+      status.textContent =
+        (navigator.onLine ? "Connected" : "Offline") +
+        " · saved " +
+        new Date(state.cachedAt).toLocaleString() +
+        " · " +
+        state.pending.length +
+        " unsent purchase(s) · member " +
+        state.actorId;
+      for (const p of state.pending) {
+        const row = node(
+          "p",
+          (p.status === "conflict" ? "Needs reconciliation: " : "Pending: ") +
+            p.command.quantity +
+            " " +
+            p.command.unit +
+            " " +
+            p.command.lineId +
+            (p.error ? " · " + p.error : ""),
+          list,
+        );
+        row.className = "warning";
+        if (
+          p.status === "conflict" &&
+          p.operationId === state.pending[0].operationId
+        ) {
+          const button = node(
+            "button",
+            "Review current list and retry this saved purchase",
+            row,
+          );
+          button.onclick = () => retry(p.operationId);
+          const keep = node(
+            "button",
+            "Keep observation and unblock other purchases",
+            row,
+          );
+          keep.onclick = () => retain(p.operationId);
+        }
+      }
+      for (const p of state.unresolvedPurchases || [])
+        node(
+          "p",
+          "Retained for reconciliation: " +
+            p.command.quantity +
+            " " +
+            p.command.unit +
+            " " +
+            p.command.lineId +
+            " · " +
+            p.actorId +
+            " · " +
+            p.command.purchasedAt,
+          list,
+        );
+      if (state.cycle.sourceChanged)
+        node(
+          "p",
+          "Selection changed; review the source list online.",
+          list,
+        ).className = "warning";
+      if (state.cycle.orphanPurchases.length)
+        node(
+          "p",
+          state.cycle.orphanPurchases.length +
+            " earlier purchases need reconciliation after a recipe change.",
+          list,
+        ).className = "warning";
+      if (state.cycle.purchases.length) {
+        const receipts = node("details", undefined, list);
+        node("summary", "Confirmed purchases", receipts);
+        for (const p of state.cycle.purchases)
+          node(
+            "p",
+            p.quantity +
+              " " +
+              p.unit +
+              " " +
+              p.lineId +
+              " · " +
+              p.actorId +
+              " · " +
+              new Date(p.purchasedAt).toLocaleString(),
+            receipts,
+          );
+      }
+      for (const route of ["market", "supermarket", "topup"]) {
+        node(
+          "h2",
+          route === "market"
+            ? "Saturday market"
+            : route === "supermarket"
+              ? "Supermarket"
+              : "Exceptional top-up",
+          list,
+        );
+        for (const line of state.cycle.lines.filter((l) => l.route === route)) {
+          const row = node("article", undefined, list);
+          node("strong", line.name, row);
+          node(
+            "small",
+            (line.remainingQuantity === null
+              ? "Amount to confirm"
+              : line.remainingQuantity) +
+              " " +
+              line.unit +
+              " remaining · " +
+              line.boughtQuantity +
+              " bought",
+            row,
+          );
+          node("small", line.sources.map((s) => s.name).join(", "), row);
+          node(
+            "small",
+            "Needed " +
+              (line.neededOn || "date unknown") +
+              " · available " +
+              (line.availableOn || "date unknown"),
+            row,
+          );
+          if (line.late)
+            node("p", "Arrives too late; plan is incomplete.", row).className =
+              "warning";
+          if (line.sourceChanged)
+            node(
+              "p",
+              "Requirement changed. Confirm the route online.",
+              row,
+            ).className = "warning";
+          const label = node(
+              "label",
+              "Actually bought (" + line.unit + ") ",
+              row,
+            ),
+            amount = node("input", undefined, label);
+          amount.type = "number";
+          amount.min = "0.001";
+          amount.step = "any";
+          amount.value =
+            line.remainingQuantity === null
+              ? ""
+              : String(line.remainingQuantity);
+          const button = node("button", "Record purchase", row);
+          button.onclick = async () => {
+            const quantity = Number(amount.value);
+            if (!(quantity > 0) && Number.isFinite(quantity)) {
+              status.textContent = "Enter the amount actually bought.";
+              return;
+            }
+            if (!Number.isFinite(quantity)) {
+              status.textContent = "Enter a finite amount.";
+              return;
+            }
+            button.disabled = true;
+            try {
+              const actor = state.actorId,
+                selection = state.cycle.selectionId;
+              state = await update((current) => {
+                if (!current) throw new Error("Saved list cleared.");
+                if (
+                  current.actorId !== actor ||
+                  current.cycle.selectionId !== selection
+                )
+                  throw new Error("Saved member or list changed. Reload.");
+                current.pending.push({
+                  operationId: crypto.randomUUID(),
+                  expectedRevision:
+                    current.cycle.revision + current.pending.length,
+                  actorId: current.actorId,
+                  status: "pending",
+                  command: {
+                    type: "purchase",
+                    lineId: line.id,
+                    quantity,
+                    unit: line.unit,
+                    observedFingerprint: line.fingerprint,
+                    purchasedAt: new Date().toISOString(),
+                  },
+                });
+                return current;
+              });
+              render();
+              if (navigator.onLine) await sync();
+            } catch (e) {
+              status.textContent = e.message;
+            } finally {
+              button.disabled = false;
+            }
+          };
+        }
+      }
+    }
+    async function request(path, body) {
+      const response = await fetch(state.apiBase + path, {
+        credentials: "include",
+        method: body ? "POST" : "GET",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        const error = new Error(
+          data.message || data.error || "Request failed " + response.status,
+        );
+        error.status = response.status;
+        throw error;
+      }
+      return response.json();
+    }
+    async function sync() {
+      if (busy) return;
+      busy = true;
+      try {
+        state = await read();
+        if (!state) return render();
+        const session = await request("/pi-meals/auth/session");
+        if (session.actorId !== state.actorId)
+          throw new Error(
+            "Sign in as " + state.actorId + " to sync these saved purchases.",
+          );
+        while (state.pending.length) {
+          const p = state.pending[0];
+          if (p.status === "conflict") break;
+          try {
+            const cycle = await request(
+              "/pi-meals/shopping/" +
+                encodeURIComponent(state.cycle.selectionId) +
+                "/commands",
+              {
+                expectedActorId: p.actorId,
+                operationId: p.operationId,
+                expectedRevision: p.expectedRevision,
+                command: p.command,
+              },
+            );
+            state = await update((current) => {
+              if (!current) throw new Error("Saved list cleared during sync.");
+              current.cycle = cycle;
+              current.pending = current.pending.filter(
+                (entry) => entry.operationId !== p.operationId,
+              );
+              current.cachedAt = new Date().toISOString();
+              return current;
+            });
+          } catch (e) {
+            if (e.status === 409) {
+              state = await update((current) => {
+                if (!current)
+                  throw new Error("Saved list cleared during sync.");
+                current.pending = current.pending.map((entry) =>
+                  entry.operationId === p.operationId
+                    ? { ...entry, status: "conflict", error: e.message }
+                    : entry,
+                );
+                return current;
+              });
+              break;
+            }
+            throw e;
+          }
+        }
+        if (!state.pending.length) {
+          const fresh = await request(
+            "/pi-meals/shopping/" + encodeURIComponent(state.cycle.selectionId),
+          );
+          state = await update((current) => {
+            if (!current) throw new Error("Saved list cleared.");
+            if (
+              current.actorId !== session.actorId ||
+              current.cycle.selectionId !== fresh.selectionId
+            )
+              throw new Error("Saved member or selection changed.");
+            return {
+              ...current,
+              cycle: fresh,
+              cachedAt: new Date().toISOString(),
+            };
+          });
+        }
+        render();
+      } catch (e) {
+        render();
+        status.textContent += " · " + e.message + " · saved purchases retained";
+      } finally {
+        busy = false;
+      }
+    }
+    async function retain(id) {
+      if (busy) return;
+      try {
+        state = await update((saved) => {
+          if (!saved) throw new Error("Saved list cleared.");
+          const p = saved.pending.find(
+            (p) => p.operationId === id && p.status === "conflict",
+          );
+          if (!p) throw new Error("Conflict not found.");
+          return {
+            ...saved,
+            pending: saved.pending.filter((p) => p.operationId !== id),
+            unresolvedPurchases: [...(saved.unresolvedPurchases || []), p],
+          };
+        });
+        render();
+      } catch (e) {
+        status.textContent = e.message;
+      }
+    }
+    async function retry(id) {
+      if (busy) return;
+      busy = true;
+      try {
+        state = await read();
+        const observation = state?.pending.find((p) => p.operationId === id);
+        if (
+          !state ||
+          !observation ||
+          observation.status !== "conflict" ||
+          state.pending[0]?.operationId !== id
+        )
+          throw new Error("Sync earlier purchases first.");
+        const epoch = localStorage.getItem("pi-meals-market-epoch");
+        const session = await request("/pi-meals/auth/session");
+        if (session.actorId !== observation.actorId)
+          throw new Error("Sign in as the member who recorded this purchase.");
+        const current = await request(
+          "/pi-meals/shopping/" + encodeURIComponent(state.cycle.selectionId),
+        );
+        const line = current.lines.find(
+          (line) =>
+            line.id === observation.command.lineId &&
+            line.unit === observation.command.unit,
+        );
+        if (
+          !line ||
+          line.fingerprint !== observation.command.observedFingerprint
+        )
+          throw new Error(
+            "Ingredient meaning or amount changed. Observation retained; review the current recipe.",
+          );
+        state = await update((saved) => {
+          if (
+            !saved ||
+            localStorage.getItem("pi-meals-market-epoch") !== epoch ||
+            saved.actorId !== session.actorId ||
+            saved.cycle.selectionId !== current.selectionId
+          )
+            throw new Error("Saved list changed during reconciliation.");
+          return {
+            ...saved,
+            cycle: current,
+            pending: saved.pending.map((p) =>
+              p.operationId === id
+                ? {
+                    ...p,
+                    operationId: crypto.randomUUID(),
+                    expectedRevision: current.revision,
+                    status: "pending",
+                    error: undefined,
+                    previousOperationIds: [
+                      ...(p.previousOperationIds || []),
+                      p.operationId,
+                    ],
+                  }
+                : p,
+            ),
+          };
+        });
+        render();
+      } catch (e) {
+        status.textContent = e.message;
+        return;
+      } finally {
+        busy = false;
+      }
+      await sync();
+    }
+    document.querySelector("#sync").onclick = sync;
+    document.querySelector("#clear").onclick = async () => {
+      if (busy) return;
+      localStorage.setItem("pi-meals-market-epoch", crypto.randomUUID());
+      await write(null);
+      state = null;
+      render();
+    };
+    window.addEventListener("online", sync);
+    window.addEventListener("offline", render);
+    if ("serviceWorker" in navigator)
+      navigator.serviceWorker
+        .register("/market/sw.js", { scope: "/market/" })
+        .catch((e) => {
+          status.textContent = "Offline shell unavailable: " + e.message;
+        });
+    read()
+      .then((v) => {
+        state = v;
+        render();
+        if (navigator.onLine) sync();
+      })
+      .catch((e) => {
+        status.textContent = "Saved list unavailable: " + e.message;
+      });
+  </script>
+</html>

@@ -317,7 +317,7 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
               recipeIngredients: {
                 create: ingredientIds.map((ing, index) => ({
                   ingredientId: ing.id,
-                  quantity: parsed.ingredients[index]?.quantity || 1,
+                  quantity: parsed.ingredients[index]?.quantity ?? null,
                   unit: canonicalizeUnit(parsed.ingredients[index]?.unit || 'piece'),
                   notes: parsed.ingredients[index]?.notes,
                   optional: false,
@@ -395,7 +395,7 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
             recipeIngredients: {
               create: ingredientIds.map((ing, index) => ({
                 ingredientId: ing.id,
-                quantity: parsed.ingredients[index]?.quantity || 1,
+                quantity: parsed.ingredients[index]?.quantity ?? null,
                 unit: parsed.ingredients[index]?.unit || 'piece',
                 notes: parsed.ingredients[index]?.notes,
                 optional: false,
@@ -654,7 +654,7 @@ export default async function ingestionRoutes(fastify: FastifyInstance) {
 
     const ingredients = recipe.recipeIngredients.map(ri => ({
       name: ri.ingredient.name,
-      quantity: Number(ri.quantity),
+      quantity: ri.quantity === null ? undefined : Number(ri.quantity),
       unit: ri.unit,
     }))
 
@@ -904,7 +904,7 @@ async function createRecipeFromScraped(
           const parsed = parseIngredientString(ir.originalString)
           return {
             ingredientId: ir.ingredient.id,
-            quantity: parsed.quantity ?? 1,
+            quantity: parsed.quantity,
             unit: parsed.unit ?? 'piece',
             notes: parsed.notes || ir.originalString,
           }
@@ -963,7 +963,7 @@ async function createRecipeFromImported(
           const parsed = parseIngredientString(ir.originalString)
           return {
             ingredientId: ir.ingredient.id,
-            quantity: parsed.quantity ?? 1,
+            quantity: parsed.quantity,
             unit: parsed.unit ?? 'piece',
             notes: parsed.notes || ir.originalString,
           }

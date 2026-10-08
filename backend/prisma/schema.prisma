@@ -214,7 +214,7 @@ model RecipeIngredient {
   id           String  @id @default(uuid())
   recipeId     String  @map("recipe_id")
   ingredientId String  @map("ingredient_id")
-  quantity     Decimal @db.Decimal(10, 2)
+  quantity     Decimal? @db.Decimal(10, 2)
   unit         String
   notes        String?
   optional     Boolean @default(false)
@@ -598,4 +598,35 @@ model AssistantSession {
 
   @@unique([channel, externalId])
   @@map("assistant_sessions")
+}
+
+// Pi Meals uses versioned, validated domain documents and atomic operation receipts.
+model PiMealDocument {
+  id String @id
+  kind String
+  revision Int @default(1)
+  data Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@index([kind, updatedAt])
+  @@map("pi_meal_documents")
+}
+model PiMealOperation {
+  id String @id
+  documentId String @map("document_id")
+  actorId String @map("actor_id")
+  payloadHash String @map("payload_hash")
+  result Json
+  createdAt DateTime @default(now()) @map("created_at")
+  @@map("pi_meal_operations")
+}
+model PiMealOutbox {
+  id String @id
+  documentId String @map("document_id")
+  actorId String @map("actor_id")
+  payload Json
+  status String @default("pending")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  @@map("pi_meal_outbox")
 }

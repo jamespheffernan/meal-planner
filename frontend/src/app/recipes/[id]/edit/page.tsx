@@ -152,7 +152,7 @@ export default function EditRecipePage() {
       cookingStyle,
       ingredients: recipeIngredients.map(ri => ({
         ingredientId: ri.ingredient.id,
-        quantity: parseFloat(ri.quantity),
+        quantity: ri.quantity.trim() ? parseFloat(ri.quantity) : null,
         unit: ri.unit,
         notes: ri.notes || undefined,
         optional: ri.optional,

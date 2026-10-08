@@ -11,6 +11,7 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
   }
 
   const res = await fetch(`${API_URL}${endpoint}`, {
+    credentials: 'include',
     ...options,
     headers,
   })
@@ -276,7 +277,7 @@ export interface Recipe {
 
 export interface RecipeIngredient {
   id: string
-  quantity: number
+  quantity: number | null
   unit: string
   notes?: string
   optional: boolean
@@ -310,7 +311,7 @@ export interface Brand {
 
 export interface IngredientRecipeLink {
   id: string
-  quantity: number
+  quantity: number | null
   unit: string
   recipe?: { id: string; name: string }
 }
@@ -550,7 +551,7 @@ export interface CreateRecipeInput {
   cookingStyle: string
   ingredients?: {
     ingredientId: string
-    quantity: number
+    quantity: number | null
     unit: string
     notes?: string
     optional?: boolean

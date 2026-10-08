@@ -116,7 +116,7 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
   })
 
   // Generate shopping list from meal plans (core algorithm from spec)
-  fastify.post('/generate', async (request: FastifyRequest<{ Body: GenerateShoppingListBody }>) => {
+  fastify.post('/generate', async (request: FastifyRequest<{ Body: GenerateShoppingListBody }>, reply) => {
     const { mealPlanIds, shoppingDate } = request.body
 
     // Get all meal plans with recipes and ingredients
@@ -132,6 +132,10 @@ export default async function shoppingListRoutes(fastify: FastifyInstance) {
         },
       },
     })
+
+    if (mealPlans.some(plan => plan.recipe.recipeIngredients.some(ingredient => ingredient.quantity === null))) {
+      return reply.badRequest('Recipe ingredient amounts need confirmation before generating a shopping list')
+    }
 
     // Get user measurement system preference
     const userPrefs = await fastify.prisma.userPreferences.findFirst()
