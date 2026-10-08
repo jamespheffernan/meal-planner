@@ -4,7 +4,9 @@ Choose recipes, review one grocery list, subtract what is already in the kitchen
 
 The existing recipe library, discovery and import pages remain available. Paste an NYT Cooking link to read it through the household's signed-in Aside browser, or choose **Find recipes open in Aside** to import selected tabs. Existing recipe tabs stay open; temporary capture tabs close afterward. Reimporting the same NYT recipe preserves previous corrections.
 
-Every import is stored as a shared PostgreSQL draft, including incomplete Instagram recipes. Closing the page or restarting the server preserves it. **Save draft changes** stores edits; **Save to recipe library** keeps a finished recipe for future shops without adding it to the current shop. Instagram imports reuse Manon Sweeper's caption, speech and OCR extraction, then use one bounded evidence interpretation call when needed. Missing amounts, yield and unclear transcription remain visible.
+Every import is stored as a shared PostgreSQL draft, including incomplete Instagram recipes. Closing the page or restarting the server preserves it. **Save draft changes** stores edits; **Save to recipe library** keeps a recipe for future shops without adding it to the current shop. A name, base yield, ingredients and instructions are required. Unspecified ingredient amounts stay null and remain flagged when shopping; they do not block library saving or weekly planning. Instagram imports reuse Manon Sweeper's caption, speech and OCR extraction, then use one bounded evidence interpretation call when needed. Missing amounts, yield and unclear transcription remain visible.
+
+Apply `backend/prisma/migrations/20261008120000_nullable_recipe_ingredient_quantity/migration.sql` before running this version against an existing database. It removes the quantity column's non-null constraint and preserves existing rows. Legacy shopping-list generation and automatic pantry deductions still require confirmed ingredient amounts.
 
 ## Run on the household host
 

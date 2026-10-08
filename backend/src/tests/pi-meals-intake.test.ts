@@ -144,6 +144,27 @@ describe("Aside accessibility recipe evidence", () => {
 });
 
 describe("source amount and ingredient-name preservation", () => {
+  it("retains an exact broccoli count despite alternate weight and preparation dimensions", () => {
+    const raw = "1 large head broccoli (about 1 pound), florets cut into 1½- to 2-inch pieces, stems thinly sliced";
+    const draft = extractDraft("broccoli", "", [{ source: "page", text: `Gnocchi\nServes 4\nIngredients\n${raw}\nMethod\nCook.` }]);
+    expect(draft.ingredients[0]).toMatchObject({ name: "large head broccoli", quantity: 1, unit: "piece", raw });
+    expect(draft.gaps.some((gap) => gap.includes("Uncertain quantity"))).toBe(false);
+  });
+  it("uses the stated package weight and preserves the original line", () => {
+    const raw = "1 (17.5-ounce) package shelf-stable potato gnocchi";
+    const draft = extractDraft("gnocchi", "", [{ source: "page", text: `Gnocchi\nServes 4\nIngredients\n${raw}\n2 (400-gram) cans tomatoes\nMethod\nCook.` }]);
+    expect(draft.ingredients[0]).toMatchObject({ name: "shelf-stable potato gnocchi", quantity: 17.5, unit: "oz", raw });
+    expect(draft.ingredients[1]).toMatchObject({ name: "tomatoes", quantity: 800, unit: "g" });
+  });
+  it("does not invent quantities for unquantified seasoning", () => {
+    const draft = extractDraft("seasoning", "", [{ source: "page", text: "Gnocchi\nServes 4\nIngredients\nSalt\nCrushed red pepper\nMethod\nCook." }]);
+    expect(draft.ingredients.map((line) => line.quantity)).toEqual([null, null]);
+  });
+  it.each(["about 1 pound broccoli", "1 approximately pound broccoli", "½ to ¾ cup milk", "1 1/2–2 cups milk", "2 to 3 onions"])("keeps uncertain primary amounts unresolved: %s", (raw) => {
+    const draft = extractDraft("uncertain", "", [{ source: "page", text: `Soup\nServes 4\nIngredients\n${raw}\nMethod\nCook.` }]);
+    expect(draft.ingredients[0].quantity).toBeNull();
+    expect(draft.gaps).toContain(`Uncertain quantity: ${raw}`);
+  });
   it("keeps a stated base amount when more is optional and keeps comma-separated food descriptors", () => {
     const draft = extractDraft("quantities", "", [
       {

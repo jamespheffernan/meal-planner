@@ -42,7 +42,7 @@ export async function normalizeUnits({ apply }: { apply: boolean }): Promise<Nor
 
     for (const ri of batch) {
       let newUnit = canonicalizeUnit(ri.unit)
-      let newQty = Number(ri.quantity)
+      let newQty = ri.quantity === null ? null : Number(ri.quantity)
       let changed = false
 
       // Re-parse items that were stored as piece with notes

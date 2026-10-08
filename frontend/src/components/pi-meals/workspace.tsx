@@ -1568,6 +1568,19 @@ function DraftEditor({
   onSaveChanges: () => void;
   onUse: () => void;
 }) {
+  const saveBlockers = [
+    ...(!draft.name.trim() || draft.name === "Untitled recipe"
+      ? ["a recipe name"]
+      : []),
+    ...(!draft.servings ? ["a base serving yield"] : []),
+    ...(!draft.ingredients.length ? ["at least one ingredient"] : []),
+    ...(!draft.instructions.some((step) => step.trim())
+      ? ["cooking instructions"]
+      : []),
+  ];
+  const hasUnspecifiedAmounts = draft.ingredients.some(
+    (row) => row.quantity === null || !row.unit.trim(),
+  );
   return (
     <section className={styles.draftEditor}>
       <fieldset disabled={busy}>
@@ -1716,15 +1729,24 @@ function DraftEditor({
           disabled={
             busy ||
             draft.status === "saved" ||
-            !draft.servings ||
-            draft.ingredients.some((row) => row.quantity === null)
+            saveBlockers.length > 0
           }
+          aria-describedby={`recipe-library-save-help-${draft.id}`}
           onClick={onSave}
         >
           {draft.status === "saved"
             ? "Saved to your library"
             : "Save to recipe library"}
         </button>
+        {draft.status !== "saved" && (
+          <p id={`recipe-library-save-help-${draft.id}`}>
+            {saveBlockers.length
+              ? `To save to your library, add ${saveBlockers.join(", ")}.`
+              : hasUnspecifiedAmounts
+                ? "You can save this recipe now. Unspecified amounts stay flagged for shopping; you do not need to invent quantities."
+                : "Save this recipe for another time without adding it to this shop."}
+          </p>
+        )}
       </fieldset>
     </section>
   );

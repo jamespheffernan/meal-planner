@@ -182,7 +182,7 @@ export function recipeItem(
     (r) => ({
       id: r.ingredientId,
       name: r.ingredient.name,
-      quantity: Number(r.quantity.toString()),
+      quantity: r.quantity === null ? null : Number(r.quantity.toString()),
       unit: r.unit,
       raw: r.notes ?? undefined,
     }),
@@ -190,9 +190,8 @@ export function recipeItem(
   if (
     ingredients.some(
       (i) =>
-        !Number.isFinite(i.quantity) ||
-        Number(i.quantity) <= 0 ||
-        !i.unit.trim(),
+        i.quantity !== null &&
+        (!Number.isFinite(i.quantity) || i.quantity <= 0 || !i.unit.trim()),
     )
   )
     bad(`${recipe.name}: ingredient quantities or units need correction.`);

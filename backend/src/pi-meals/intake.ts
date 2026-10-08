@@ -120,6 +120,18 @@ function recipeGaps(
   if (!draft.instructions.length) gaps.push("Instructions are missing.");
   return gaps;
 }
+// Keeping a recipe and calculating an exact shopping amount are separate decisions.
+// Unspecified ingredient amounts stay null, with their source text and warnings intact.
+function librarySaveGaps(draft: RecipeDraft): string[] {
+  const gaps: string[] = [];
+  if (!draft.name.trim() || draft.name === "Untitled recipe")
+    gaps.push("Add a recipe name.");
+  if (!draft.servings) gaps.push("Choose a base serving yield.");
+  if (!draft.ingredients.length) gaps.push("Add at least one ingredient.");
+  if (!draft.instructions.some((step) => step.trim()))
+    gaps.push("Add the cooking instructions.");
+  return gaps;
+}
 /** Aside accessibility snapshots contain role wrappers, not literal recipe prose.
  * Normalize only the documented text/heading/list-item nodes; preserve the source in evidence.
  */
@@ -184,11 +196,26 @@ export function normalizeRecipeEvidence(text: string): string[] {
   return output;
 }
 function parseEvidenceIngredient(text: string) {
+  // Only the primary amount is uncertain: alternate weights and cutting dimensions are notes.
+  const primary = text.replace(/\([^)]*\)/g, "").split(/[,;]/)[0];
+  const uncertainPrimary =
+    /^(?:about|approximately|roughly)\b|^[\d¼½¾⅓⅔⅛⅜⅝⅞][\d\s¼½¾⅓⅔⅛⅜⅝⅞./]*\s*(?:[-–—]|to)\s*[\d¼½¾⅓⅔⅛⅜⅝⅞]|^[\d¼½¾⅓⅔⅛⅜⅝⅞][\d\s¼½¾⅓⅔⅛⅜⅝⅞./]*\s*(?:about|approximately|roughly)\b/i.test(primary.trim());
+  const packaged = text.match(
+    /^(\d+(?:\.\d+)?)\s*\((\d+(?:\.\d+)?)[-\s]*(ounces?|oz|pounds?|lbs?|grams?|g|kilograms?|kg)\)\s*(?:packages?|packs?|cans?|tins?|bags?)\s+(.*)$/i,
+  );
+  if (packaged) {
+    const parsed = parseIngredientString(`${packaged[2]} ${packaged[3]} ${packaged[4]}`);
+    return {
+      ...parsed,
+      quantity: parsed.quantity === null ? null : Number(packaged[1]) * parsed.quantity,
+      uncertain: uncertainPrimary,
+    };
+  }
   // A quantified base ingredient can also invite an unquantified garnish; do not erase its base amount.
   let base = text.replace(/,\s*plus more\b.*$/i, "");
   // Adjectives can be comma-separated before the food name. Only preparation clauses end the name.
   base = base.replace(
-    /,(?!\s*(?:cut|chopped|finely|thinly|diced|cored|seeded|trimmed|rinsed|drained|undrained|divided|plus|for|to|patted|halved|coarsely|grated|sliced|minced|crushed|peeled|optional)\b)\s*/gi,
+    /,(?!\s*(?:florets|stems|cut|chopped|finely|thinly|diced|cored|seeded|trimmed|rinsed|drained|undrained|divided|plus|for|to|patted|halved|coarsely|grated|sliced|minced|crushed|peeled|optional)\b)\s*/gi,
     " ",
   );
   const combined = base.split(/\s+plus\s+(?=[\d¼½¾⅓⅔⅛⅜⅝⅞])/i);
@@ -206,10 +233,10 @@ function parseEvidenceIngredient(text: string) {
           ? first.quantity + extra
           : null,
       unit: first.unit ?? second.unit,
-      uncertain: extra === null,
+      uncertain: uncertainPrimary || extra === null,
     };
   }
-  return { ...parseIngredientString(base), uncertain: combined.length > 2 };
+  return { ...parseIngredientString(base), uncertain: uncertainPrimary || combined.length > 2 };
 }
 export function extractDraft(
   id: string,
@@ -278,11 +305,7 @@ export function extractDraft(
     // Amount lines outside an explicit method section are useful across caption/OCR/speech.
     if (section === "ingredients" || (amount && section !== "method")) {
       const parsed = parseEvidenceIngredient(text);
-      const uncertain =
-        parsed.uncertain ||
-        /^\d+(?:\.\d+)?\s*(?:[-–—]|to)\s*\d|\b(?:about|approximately|roughly)\b/i.test(
-          text,
-        );
+      const uncertain = parsed.uncertain;
       const quantity = uncertain ? null : parsed.quantity;
       const unit = parsed.unit ?? "";
       const existing = ingredients.find((i) => i.name === parsed.name);
@@ -909,7 +932,7 @@ export async function saveDraft(
         return saved;
       }
       if (row.revision !== input.expectedRevision) throw new MealConflict();
-      const gaps = recipeGaps(draft);
+      const gaps = librarySaveGaps(draft);
       if (gaps.length)
         throw new IntakeError(
           `Complete this recipe before saving: ${gaps.join(" ")}`,
@@ -928,7 +951,7 @@ export async function saveDraft(
         });
         ingredients.push({
           ingredientId: ingredient.id,
-          quantity: line.quantity!,
+          quantity: line.quantity,
           unit: line.unit,
           notes: line.raw,
         });

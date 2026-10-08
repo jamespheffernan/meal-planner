@@ -37,6 +37,18 @@ describe("assistant domain preparation", () => {
       ingredients: [{ id: "i", name: "onions", quantity: 1.5, unit: "kg" }],
     });
   });
+  it("preserves unknown library amounts in a selection snapshot", () => {
+    const snapshot = librarySnapshot({
+      id: "r", name: "Soup", servings: 2, source: null, photoUrl: null,
+      recipeIngredients: [{
+        id: "salt", quantity: null, unit: "to_taste", notes: "Salt to taste",
+        ingredient: { name: "salt" },
+      }],
+    });
+    expect(snapshot.ingredients[0]).toEqual({
+      id: "salt", name: "salt", quantity: null, unit: "to_taste", raw: "Salt to taste",
+    });
+  });
   it("replays a committed selection receipt without reading changed state or preparing again", async () => {
     const prepare = vi.fn();
     const prisma = {

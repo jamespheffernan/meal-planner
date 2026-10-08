@@ -214,7 +214,7 @@ model RecipeIngredient {
   id           String  @id @default(uuid())
   recipeId     String  @map("recipe_id")
   ingredientId String  @map("ingredient_id")
-  quantity     Decimal @db.Decimal(10, 2)
+  quantity     Decimal? @db.Decimal(10, 2)
   unit         String
   notes        String?
   optional     Boolean @default(false)

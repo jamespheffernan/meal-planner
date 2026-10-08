@@ -145,7 +145,7 @@ export function librarySnapshot(
     photoUrl: string | null;
     recipeIngredients: Array<{
       id: string;
-      quantity: number | { toNumber(): number };
+      quantity: number | { toNumber(): number } | null;
       unit: string;
       notes: string | null;
       ingredient: { name: string };
@@ -165,7 +165,9 @@ export function librarySnapshot(
       id: i.id,
       name: i.ingredient.name,
       quantity:
-        typeof i.quantity === "number" ? i.quantity : i.quantity.toNumber(),
+        i.quantity === null
+          ? null
+          : typeof i.quantity === "number" ? i.quantity : i.quantity.toNumber(),
       unit: i.unit,
       ...(i.notes ? { raw: i.notes } : {}),
     })),

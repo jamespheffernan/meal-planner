@@ -200,7 +200,7 @@ export default async function pantryRoutes(fastify: FastifyInstance) {
       recipeId: string
       servingsCooked: number
     }
-  }>) => {
+  }>, reply) => {
     const { recipeId, servingsCooked } = request.body
 
     // Get recipe with ingredients
@@ -213,6 +213,10 @@ export default async function pantryRoutes(fastify: FastifyInstance) {
 
     if (!recipe) {
       return { deducted: [] }
+    }
+
+    if (recipe.recipeIngredients.some(ingredient => ingredient.quantity === null)) {
+      return reply.badRequest('Recipe ingredient amounts need confirmation before deducting pantry stock')
     }
 
     const multiplier = servingsCooked / recipe.servings

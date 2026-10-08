@@ -277,7 +277,7 @@ export interface Recipe {
 
 export interface RecipeIngredient {
   id: string
-  quantity: number
+  quantity: number | null
   unit: string
   notes?: string
   optional: boolean
@@ -311,7 +311,7 @@ export interface Brand {
 
 export interface IngredientRecipeLink {
   id: string
-  quantity: number
+  quantity: number | null
   unit: string
   recipe?: { id: string; name: string }
 }
@@ -551,7 +551,7 @@ export interface CreateRecipeInput {
   cookingStyle: string
   ingredients?: {
     ingredientId: string
-    quantity: number
+    quantity: number | null
     unit: string
     notes?: string
     optional?: boolean

@@ -31,7 +31,7 @@ interface CreateRecipeBody {
   estimatedCostPerServing?: number
   ingredients?: {
     ingredientId: string
-    quantity: number
+    quantity: number | null
     unit: string
     notes?: string
     optional?: boolean

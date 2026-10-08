@@ -532,7 +532,7 @@ async function createRecipeFromCandidate(
           const parsed = parseIngredientString(ir.originalString)
           return {
             ingredientId: ir.ingredient.id,
-            quantity: parsed.quantity ?? 1,
+            quantity: parsed.quantity,
             unit: parsed.unit ?? 'piece',
             notes: parsed.notes || ir.originalString,
           }

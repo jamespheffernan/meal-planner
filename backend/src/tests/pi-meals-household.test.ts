@@ -169,6 +169,23 @@ describe("household routine preparation", () => {
     expect(lines.find((i) => i.name === "Yogurt")?.quantity).toBe(1000);
     expect(lines.find((i) => i.name === "Bread")?.quantity).toBe(1);
   });
+  it("plans saved recipes with unspecified seasonings and keeps their shopping amounts unknown", () => {
+    const seasoned = {
+      ...recipe,
+      recipeIngredients: [
+        ...recipe.recipeIngredients,
+        { ingredientId: "salt", quantity: null, unit: "", notes: "Salt", ingredient: { name: "Salt" } },
+      ],
+    };
+    const plan = planHousehold(profile(), [seasoned], input);
+    const lines = compileSelectionLines(plan.items);
+    expect(lines.find((line) => line.name === "Salt")).toMatchObject({
+      quantity: null,
+      buyQuantity: null,
+      warnings: ["One or more ingredient amounts are unknown."],
+    });
+    expect(lines.find((line) => line.name === "Carrot")?.quantity).toBe(801);
+  });
   it("reduces only the absent person lunch portions", () => {
     const plan = planHousehold(profile(), [recipe], {
       ...input,

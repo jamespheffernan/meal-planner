@@ -209,19 +209,42 @@ describe("persisted recipe intake", () => {
     ).toBe(saved.recipeId);
     expect(store.client.recipe.create).toHaveBeenCalledTimes(1);
   });
-  it("incomplete amounts remain persisted but cannot create a canonical recipe", async () => {
+  it("saves unspecified amounts without inventing quantities and preserves their warnings and evidence", async () => {
     const store = memoryStore();
     const draft = await createDraft(store.prisma, "actor", {
       operationId: "create",
-      text: "Soup\nServes 2\nIngredients\ntomatoes\nMethod\nSimmer.",
+      text: "Soup\nServes 2\nIngredients\n200 g tomatoes\nSalt\nPepper to taste\nMethod\nSimmer.",
     });
     expect(store.documents.has(draft.id)).toBe(true);
-    await expect(
-      saveDraft(store.prisma, "actor", draft.id, {
-        operationId: "save",
-        expectedRevision: 1,
-      }),
-    ).rejects.toThrow("Quantity needed");
+    const saved = await saveDraft(store.prisma, "actor", draft.id, {
+      operationId: "save",
+      expectedRevision: 1,
+    });
+    expect(saved.status).toBe("saved");
+    expect(saved.evidence).toEqual(draft.evidence);
+    expect(saved.gaps).toEqual(expect.arrayContaining(draft.gaps));
+    const rows = store.recipes.get(saved.recipeId!)?.recipeIngredients.create;
+    expect(rows).toEqual([
+      expect.objectContaining({ quantity: 200, unit: "g" }),
+      expect.objectContaining({ quantity: null, unit: "", notes: "Salt" }),
+      expect.objectContaining({ quantity: null, unit: "to_taste", notes: "Pepper to taste" }),
+    ]);
+    expect(await saveDraft(store.prisma, "actor", draft.id, {
+      operationId: "save", expectedRevision: 1,
+    })).toEqual(saved);
+    expect(store.client.recipe.create).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    ["Serves 2\nIngredients\nSalt\nMethod\nSimmer.", "recipe name"],
+    ["Soup\nIngredients\nSalt\nMethod\nSimmer.", "serving yield"],
+    ["Soup\nServes 2\nMethod\nSimmer.", "ingredient"],
+    ["Soup\nServes 2\nIngredients\nSalt", "instructions"],
+  ])("still explains missing recipe essentials before creating a library entry", async (text, reason) => {
+    const store = memoryStore();
+    const draft = await createDraft(store.prisma, "actor", { operationId: "create", text });
+    await expect(saveDraft(store.prisma, "actor", draft.id, {
+      operationId: "save", expectedRevision: 1,
+    })).rejects.toThrow(reason);
     expect(store.client.recipe.create).not.toHaveBeenCalled();
   });
   it("captures NYT automatically, persists evidence and deduplicates recipe identity without recapture", async () => {
