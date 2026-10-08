@@ -31,6 +31,8 @@ import { ProductPicker } from "./product-picker";
 import { productsApi } from "@/lib/pi-meals-products-api";
 import { ShoppingCycle } from "./shopping-cycle";
 import { ManualExtras } from "./manual-extras";
+import { RecipePlan, PlanSummary } from "./recipe-plan";
+import { groupRecipes, totalRecipeServings } from "@/lib/pi-meals-plan";
 import { saveCachedShopping } from "@/lib/pi-meals-shopping-api";
 
 function keepActiveBasket(current: BasketProposal | null) {
@@ -41,7 +43,7 @@ export function MealsWorkspace() {
   const [libraryLimit, setLibraryLimit] = useState(12);
   const [view, setView] = useState<"recipes" | "kitchen" | "shop">("recipes");
   const [importOpen, setImportOpen] = useState(false);
-  const [selectionExpanded, setSelectionExpanded] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [latestDraftId, setLatestDraftId] = useState<string | null>(null);
   const [asideTabs, setAsideTabs] = useState<AsideRecipeTab[] | null>(null);
   const [chosenAsideUrls, setChosenAsideUrls] = useState<string[]>([]);
@@ -253,6 +255,7 @@ export function MealsWorkspace() {
     );
   }
   function showImports() {
+    setView("recipes");
     setImportOpen(true);
     requestAnimationFrame(() =>
       document
@@ -312,6 +315,22 @@ export function MealsWorkspace() {
     } else setUndoStock(null);
     setSelection(updated);
     setBasket(keepActiveBasket);
+  }
+  async function commitPlanChange(command: SelectionChange) {
+    let saved = false;
+    await run(async () => {
+      await change(command);
+      saved = true;
+    });
+    if (!saved) throw new Error("Your change wasn’t saved. Try again.");
+  }
+  function showLibrary() {
+    setLibraryOpen(true);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("recipe-library")
+        ?.scrollIntoView({ block: "start" }),
+    );
   }
   async function add(recipe: Recipe) {
     if (!selection) return;
@@ -449,16 +468,22 @@ export function MealsWorkspace() {
     selection?.lines.filter(
       (line) => line.buyQuantity === null || line.buyQuantity > 0,
     ) || [];
-  const recipes =
-    selection?.items.filter(
-      (item) =>
-        item.recipeId || item.draftId || !item.id.startsWith("routine:"),
-    ) || [];
-  const extras =
-    selection?.items.filter(
-      (item) =>
-        !item.recipeId && !item.draftId && item.id.startsWith("routine:"),
-    ) || [];
+  const recipeGroups = groupRecipes(selection?.items || []);
+  function recipeSelected(recipe: Recipe) {
+    const candidate = {
+      id: `library:${recipe.id}`,
+      recipeId: recipe.id,
+      name: recipe.name,
+      source: recipe.source,
+      servings: recipe.servings,
+      baseServings: recipe.servings,
+      ingredients: [],
+    };
+    return (
+      groupRecipes([...(selection?.items || []), candidate]).length ===
+      recipeGroups.length
+    );
+  }
   const covered =
     selection?.lines.filter((line) => line.buyQuantity === 0).length || 0;
   const visibleLines =
@@ -477,15 +502,13 @@ export function MealsWorkspace() {
     <div className={styles.workspace}>
       <header className={styles.pageHeader}>
         <div>
-          <h1>
-            {login
-              ? "Your kitchen"
-              : selection?.title || "Opening your kitchen…"}
-          </h1>
+          <h1>{login ? "Your kitchen" : "Your weekly shop"}</h1>
           <p>
             {login
               ? "Sign in to your shared recipes and shopping list."
-              : `${recipes.length} recipes · ${need.length} ingredients to shop · Saved as you go`}
+              : selection
+                ? `${recipeGroups.length} ${recipeGroups.length === 1 ? "recipe" : "recipes"} · ${new Intl.NumberFormat("en-GB", { maximumFractionDigits: 2 }).format(totalRecipeServings(selection.items))} recipe servings`
+                : "Opening your kitchen…"}
           </p>
         </div>
         {!login && (
@@ -494,6 +517,11 @@ export function MealsWorkspace() {
               Saved shops <ChevronRight size={15} />
             </summary>
             <div className={styles.manageContent}>
+              {selection && (
+                <p className={styles.savedName}>
+                  {selection.title} · Saved as you go
+                </p>
+              )}
               <label>
                 Open a saved shop
                 <select
@@ -651,7 +679,7 @@ export function MealsWorkspace() {
               onClick={() => openView("recipes")}
             >
               <BookOpen size={17} />
-              Recipes <span>{recipes.length}</span>
+              Plan <span>{recipeGroups.length}</span>
             </button>
             <button
               aria-pressed={view === "kitchen"}
@@ -659,7 +687,7 @@ export function MealsWorkspace() {
               onClick={() => openView("kitchen")}
             >
               <Check size={17} />
-              Check the kitchen{" "}
+              Check kitchen{" "}
               <span>
                 {covered}/{selection?.lines.length || 0}
               </span>
@@ -674,7 +702,10 @@ export function MealsWorkspace() {
             </button>
           </nav>
           {selection && (
-            <section className={styles.assistant}>
+            <details className={styles.assistant}>
+              <summary>
+                Ask the kitchen assistant{assistantActive ? " · Working…" : ""}
+              </summary>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -741,10 +772,74 @@ export function MealsWorkspace() {
                   )}
                 </div>
               )}
-            </section>
+            </details>
           )}
 
           <div id="recipes-view" hidden={view !== "recipes"}>
+            {selection && (
+              <>
+                <div className={styles.planActions}>
+                  <p>Choose your recipes and set how much to make.</p>
+                  <div>
+                    <button
+                      aria-expanded={importOpen}
+                      aria-controls="recipe-intake"
+                      onClick={() =>
+                        importOpen ? setImportOpen(false) : showImports()
+                      }
+                    >
+                      <Link2 size={16} />
+                      Import a recipe
+                    </button>
+                    <button
+                      aria-expanded={libraryOpen}
+                      aria-controls="recipe-library"
+                      onClick={() =>
+                        libraryOpen ? setLibraryOpen(false) : showLibrary()
+                      }
+                    >
+                      <Plus size={16} />
+                      Add recipes
+                    </button>
+                  </div>
+                </div>
+                <div className={styles.weekPlan}>
+                  <RecipePlan
+                    selection={selection}
+                    disabled={busy}
+                    onChange={commitPlanChange}
+                  />
+                  <div className={styles.staplesColumn}>
+                    <ManualExtras
+                      key={selection.id}
+                      selection={selection}
+                      disabled={busy}
+                      onChange={commitPlanChange}
+                    />
+                  </div>
+                </div>
+                <div className={styles.planContinue}>
+                  <div>
+                    <strong>
+                      {selection.lines.length} items on your combined list
+                    </strong>
+                    <p>Next, cross off what’s already in the kitchen.</p>
+                  </div>
+                  <button
+                    className={styles.primary}
+                    disabled={busy || !selection.lines.length}
+                    onClick={() => openView("kitchen")}
+                  >
+                    Check kitchen <ArrowRight size={16} />
+                  </button>
+                </div>
+                {drafts.length > 0 && (
+                  <button className={styles.textButton} onClick={showImports}>
+                    Review {drafts.length} imported drafts
+                  </button>
+                )}
+              </>
+            )}
             <section
               id="recipe-intake"
               className={styles.intake}
@@ -899,294 +994,133 @@ export function MealsWorkspace() {
               )}
             </section>
 
-            <div className={styles.recipeWorkspace}>
-              <section id="recipe-library" className={styles.library}>
-                <div className={styles.sectionTitle}>
-                  <div>
-                    <h2>What looks good?</h2>
-                    <p>Choose from your recipes, or bring in a new one.</p>
-                  </div>
-                  <button
-                    aria-expanded={importOpen}
-                    aria-controls="recipe-intake"
-                    onClick={() =>
-                      importOpen ? setImportOpen(false) : showImports()
-                    }
-                  >
-                    <Link2 size={16} /> Import a recipe
-                  </button>
+            <section
+              id="recipe-library"
+              className={styles.library}
+              hidden={!libraryOpen}
+            >
+              <div className={styles.sectionTitle}>
+                <div>
+                  <h2>Add recipes from your library</h2>
+                  <p>Your plan stays saved while you browse.</p>
                 </div>
-                <div className={styles.searchBar}>
-                  <Search size={18} aria-hidden="true" />
-                  <input
-                    className={styles.search}
-                    placeholder="Find a recipe…"
-                    aria-label="Search recipe library"
-                    value={search}
-                    onChange={(e) => {
-                      setSearch(e.target.value);
-                      setLibraryLimit(12);
-                    }}
-                  />
-                </div>
-                <div className={styles.libraryMeta}>
-                  <span>
-                    {
-                      library.filter((recipe) =>
-                        recipe.name
-                          .toLowerCase()
-                          .includes(search.toLowerCase()),
-                      ).length
-                    }{" "}
-                    recipes
-                  </span>
-                  <Link href="/discover">
-                    Find something new <ArrowRight size={14} />
-                  </Link>
-                </div>
-                <div className={styles.cards}>
-                  {library
-                    .filter((recipe) =>
-                      recipe.name.toLowerCase().includes(search.toLowerCase()),
-                    )
-                    .slice(0, libraryLimit)
-                    .map((recipe) => (
-                      <article className={styles.card} key={recipe.id}>
-                        <RecipePhoto
-                          photo={recipe.photoUrl}
-                          name={recipe.name}
-                        />
-                        <div className={styles.cardBody}>
-                          <h3>{recipe.name}</h3>
-                          <p>
-                            {recipe.servings} servings ·{" "}
-                            {recipe.cookTimeMinutes} min
-                          </p>
-                          <button
-                            className={styles.addButton}
-                            disabled={
-                              busy ||
-                              !selection ||
-                              selection.items.some(
-                                (item) => item.recipeId === recipe.id,
-                              )
-                            }
-                            onClick={() => void run(() => add(recipe))}
-                          >
-                            {selection?.items.some(
-                              (item) => item.recipeId === recipe.id,
-                            ) ? (
-                              <>
-                                <Check size={16} />
-                                Selected
-                              </>
-                            ) : (
-                              <>
-                                <Plus size={16} />
-                                Add
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                </div>
-                {library.filter((recipe) =>
-                  recipe.name.toLowerCase().includes(search.toLowerCase()),
-                ).length > libraryLimit && (
-                  <button
-                    onClick={() => setLibraryLimit((count) => count + 12)}
-                  >
-                    Show more recipes
-                  </button>
-                )}
-                {!busy &&
-                  library.length > 0 &&
-                  !library.some((recipe) =>
-                    recipe.name.toLowerCase().includes(search.toLowerCase()),
-                  ) && (
-                    <p className={styles.empty}>
-                      No recipes match “{search}”. Try another name or import a
-                      recipe.
-                    </p>
-                  )}
-                {!busy && !library.length && (
-                  <p>
-                    Your library is ready for its first recipe. Import a link or{" "}
-                    <Link href="/recipes/new">write your own</Link>.
-                  </p>
-                )}
-              </section>
-
-              <aside className={styles.selectionRail}>
-                <div className={styles.sectionTitle}>
-                  <h2>This shop</h2>
-                  <span className={styles.desktopCount}>
-                    {recipes.length} recipes
-                  </span>
-                  <button
-                    className={styles.mobileSelectionToggle}
-                    aria-expanded={selectionExpanded}
-                    aria-controls="chosen-recipes"
-                    onClick={() => setSelectionExpanded(!selectionExpanded)}
-                  >
-                    {selectionExpanded
-                      ? "Hide meals"
-                      : `Show ${recipes.length} meals`}
-                    <ChevronRight size={15} />
-                  </button>
-                </div>
-                {!recipes.length && (
-                  <p className={styles.empty}>
-                    Pick a few meals you fancy. Their ingredients will come
-                    together in one list.
-                  </p>
-                )}
                 <button
-                  className={styles.primary}
-                  disabled={!selection?.lines.length}
-                  onClick={() => openView("kitchen")}
+                  onClick={() => {
+                    setLibraryOpen(false);
+                    document
+                      .getElementById("shop-navigation")
+                      ?.scrollIntoView({ block: "start" });
+                  }}
                 >
-                  Check the kitchen <ArrowRight size={16} />
+                  Done choosing <Check size={16} />
                 </button>
-                <p className={styles.railHint}>
-                  {selection?.lines.length || 0} combined ingredients. Cross off
-                  what you have.
-                </p>
-                <div
-                  id="chosen-recipes"
-                  className={`${styles.selectionDetails} ${selectionExpanded ? styles.selectionExpanded : ""}`}
-                >
-                  <div className={styles.chosenRecipes}>
-                    {recipes.map((item) => (
-                      <article className={styles.chosenRecipe} key={item.id}>
-                        <div className={styles.chosenHeading}>
-                          {item.photoUrl && (
-                            <img
-                              className={styles.chosenPhoto}
-                              src={item.photoUrl}
-                              alt=""
-                              loading="lazy"
-                            />
-                          )}
-                          <div>
-                            <h3>{item.name}</h3>
-                            {item.source && (
-                              <a
-                                href={safeSource(item.source)}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                {sourceLabel(item.source)} ↗
-                              </a>
-                            )}
-                          </div>
-                          <button
-                            aria-label={`Remove ${item.name}`}
-                            disabled={busy}
-                            onClick={() =>
-                              void run(() =>
-                                change({
-                                  type: "replace_items",
-                                  items: selection!.items.filter(
-                                    (row) => row.id !== item.id,
-                                  ),
-                                }),
-                              )
-                            }
-                          >
-                            <X size={15} />
-                          </button>
-                        </div>
-                        <div className={styles.chosenFooter}>
-                          <label className={styles.servings}>
-                            Servings
-                            <input
-                              type="number"
-                              min="1"
-                              max="100"
-                              value={item.servings}
-                              disabled={busy}
-                              onChange={(e) => {
-                                const servings = Number(e.target.value);
-                                if (servings > 0)
-                                  void run(() =>
-                                    change({
-                                      type: "replace_items",
-                                      items: selection!.items.map((row) =>
-                                        row.id === item.id
-                                          ? { ...row, servings }
-                                          : row,
-                                      ),
-                                    }),
-                                  );
-                              }}
-                            />
-                          </label>
-                          {item.recipeId ? (
-                            <Link href={`/recipes/${item.recipeId}`}>
-                              Cook recipe <ArrowRight size={13} />
-                            </Link>
+              </div>
+              <div className={styles.searchBar}>
+                <Search size={18} aria-hidden="true" />
+                <input
+                  className={styles.search}
+                  placeholder="Find a recipe…"
+                  aria-label="Search recipe library"
+                  value={search}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setLibraryLimit(12);
+                  }}
+                />
+              </div>
+              <div className={styles.libraryMeta}>
+                <span>
+                  {
+                    library.filter((recipe) =>
+                      recipe.name.toLowerCase().includes(search.toLowerCase()),
+                    ).length
+                  }{" "}
+                  recipes
+                </span>
+                <Link href="/discover">
+                  Find something new <ArrowRight size={14} />
+                </Link>
+              </div>
+              <div className={styles.cards}>
+                {library
+                  .filter((recipe) =>
+                    recipe.name.toLowerCase().includes(search.toLowerCase()),
+                  )
+                  .slice(0, libraryLimit)
+                  .map((recipe) => (
+                    <article className={styles.card} key={recipe.id}>
+                      <RecipePhoto photo={recipe.photoUrl} name={recipe.name} />
+                      <div className={styles.cardBody}>
+                        <h3>{recipe.name}</h3>
+                        <p>
+                          {recipe.servings} servings · {recipe.cookTimeMinutes}{" "}
+                          min
+                        </p>
+                        <button
+                          className={styles.addButton}
+                          disabled={
+                            busy || !selection || recipeSelected(recipe)
+                          }
+                          onClick={() => void run(() => add(recipe))}
+                        >
+                          {recipeSelected(recipe) ? (
+                            <>
+                              <Check size={16} />
+                              Selected
+                            </>
                           ) : (
-                            <span>{item.ingredients.length} ingredients</span>
+                            <>
+                              <Plus size={16} />
+                              Add
+                            </>
                           )}
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-                  {extras.length > 0 && (
-                    <details>
-                      <summary>
-                        {extras.length} shopping extra
-                        {extras.length === 1 ? "" : "s"}
-                      </summary>
-                      {extras.map((item) => (
-                        <div className={styles.extra} key={item.id}>
-                          <span>{item.name}</span>
-                          <button
-                            disabled={busy}
-                            aria-label={`Remove ${item.name}`}
-                            onClick={() =>
-                              void run(() =>
-                                change({
-                                  type: "replace_items",
-                                  items: selection!.items.filter(
-                                    (row) => row.id !== item.id,
-                                  ),
-                                }),
-                              )
-                            }
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ))}
-                    </details>
-                  )}
-                </div>
-                {drafts.length > 0 && (
-                  <button
-                    className={styles.textButton}
-                    onClick={() => {
-                      showImports();
-                    }}
-                  >
-                    Review {drafts.length} imported drafts
-                  </button>
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+              </div>
+              {library.filter((recipe) =>
+                recipe.name.toLowerCase().includes(search.toLowerCase()),
+              ).length > libraryLimit && (
+                <button onClick={() => setLibraryLimit((count) => count + 12)}>
+                  Show more recipes
+                </button>
+              )}
+              {!busy &&
+                library.length > 0 &&
+                !library.some((recipe) =>
+                  recipe.name.toLowerCase().includes(search.toLowerCase()),
+                ) && (
+                  <p className={styles.empty}>
+                    No recipes match “{search}”. Try another name or import a
+                    recipe.
+                  </p>
                 )}
-              </aside>
-            </div>
+              {!busy && !library.length && (
+                <p>
+                  Your library is ready for its first recipe. Import a link or{" "}
+                  <Link href="/recipes/new">write your own</Link>.
+                </p>
+              )}
+            </section>
           </div>
           <section
             id="kitchen-view"
             className={styles.kitchen}
             hidden={view !== "kitchen"}
           >
+            {selection && (
+              <PlanSummary
+                selection={selection}
+                onEdit={() => openView("recipes")}
+              />
+            )}
             <div className={styles.sectionTitle}>
               <div>
                 <h2>What do you already have?</h2>
                 <p>
-                  All your recipes, combined. Tick anything you have enough of.
+                  Recipes and staples, combined. Tick anything you have enough
+                  of.
                 </p>
               </div>
               <button
@@ -1194,7 +1128,7 @@ export function MealsWorkspace() {
                 disabled={!selection?.lines.length}
                 onClick={() => openView("shop")}
               >
-                Shop {need.length} ingredients <ArrowRight size={16} />
+                Shop {need.length} items <ArrowRight size={16} />
               </button>
             </div>
             <div className={styles.listTools}>
@@ -1281,8 +1215,8 @@ export function MealsWorkspace() {
                       <div>
                         <h3>{line.name}</h3>
                         <span>
-                          {formatQuantity(line.quantity, line.unit)} in your
-                          recipes
+                          {formatQuantity(line.quantity, line.unit)} needed for
+                          this shop
                         </span>
                       </div>
                       <strong>
@@ -1297,7 +1231,7 @@ export function MealsWorkspace() {
                       <summary>
                         {line.haveQuantity > 0 && line.buyQuantity !== 0
                           ? `Have ${formatQuantity(line.haveQuantity, line.unit)} · change amount`
-                          : "Have some, or check recipes"}
+                          : "Have some, or see where it’s used"}
                       </summary>
                       <div className={styles.ingredientDetailBody}>
                         <div>
@@ -1309,8 +1243,8 @@ export function MealsWorkspace() {
                           ))}
                           {line.quantity === null && (
                             <p>
-                              Check the amount in the recipe, or tick this item
-                              if you have enough.
+                              Check the amount needed, or tick this item if you
+                              have enough.
                             </p>
                           )}
                         </div>
@@ -1361,6 +1295,12 @@ export function MealsWorkspace() {
             )}
           </section>
           <div id="shop-view" hidden={view !== "shop"}>
+            {selection && (
+              <PlanSummary
+                selection={selection}
+                onEdit={() => openView("recipes")}
+              />
+            )}
             <section className={styles.basket}>
               <div>
                 <h2>Send the list to Ocado</h2>
@@ -1508,11 +1448,6 @@ export function MealsWorkspace() {
             {selection && (
               <div className={styles.shopList}>
                 <ShoppingCycle selection={selection} />
-                <ManualExtras
-                  selection={selection}
-                  disabled={busy}
-                  onChange={(c) => run(() => change(c))}
-                />
               </div>
             )}
           </div>
@@ -1523,19 +1458,6 @@ export function MealsWorkspace() {
       </div>
     </div>
   );
-}
-function safeSource(source: string) {
-  return /^https?:\/\//i.test(source) ? source : undefined;
-}
-function sourceLabel(source: string) {
-  try {
-    const host = new URL(source).hostname.replace(/^www\./, "");
-    if (host.endsWith("nytimes.com")) return "NYT Cooking";
-    if (host.endsWith("instagram.com")) return "Instagram";
-    return host.replace(/\.com$/, "");
-  } catch {
-    return "Recipe source";
-  }
 }
 function RecipePhoto({ photo, name }: { photo?: string; name: string }) {
   return (
@@ -1726,11 +1648,7 @@ function DraftEditor({
           Use this draft in this shop
         </button>
         <button
-          disabled={
-            busy ||
-            draft.status === "saved" ||
-            saveBlockers.length > 0
-          }
+          disabled={busy || draft.status === "saved" || saveBlockers.length > 0}
           aria-describedby={`recipe-library-save-help-${draft.id}`}
           onClick={onSave}
         >

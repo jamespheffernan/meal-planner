@@ -79,7 +79,7 @@
   resize: vertical;
 }
 .workspace h1 {
-  font-size: clamp(24px, 2.4vw, 32px);
+  font-size: 32px;
   font-weight: 650;
   line-height: 1.2;
   letter-spacing: -0.7px;
@@ -242,12 +242,6 @@
   white-space: pre-wrap;
   max-width: 850px;
 }
-.recipeWorkspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px;
-  gap: 32px;
-  align-items: start;
-}
 .library {
   min-width: 0;
 }
@@ -360,90 +354,6 @@
 .library > button {
   margin-top: 24px;
 }
-.selectionRail {
-  position: sticky;
-  top: 20px;
-  border-left: 1px solid #dce2d7;
-  padding-left: 25px;
-  min-width: 0;
-}
-.selectionRail .sectionTitle {
-  margin-bottom: 4px;
-}
-.chosenRecipe {
-  padding: 17px 0;
-  border-bottom: 1px solid #dce2d7;
-}
-.chosenHeading {
-  display: flex;
-  gap: 10px;
-  align-items: flex-start;
-}
-.chosenHeading > div {
-  flex: 1;
-  min-width: 0;
-}
-.chosenHeading h3 {
-  font-size: 14px;
-}
-.chosenHeading a {
-  display: inline-block;
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 5px;
-}
-.chosenHeading > button {
-  flex-shrink: 0;
-  padding: 5px;
-  min-height: 28px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-}
-.chosenPhoto {
-  width: 52px;
-  height: 58px;
-  object-fit: cover;
-  border-radius: 6px;
-  flex-shrink: 0;
-}
-.chosenFooter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding-top: 11px;
-  font-size: 11px;
-  color: var(--muted);
-}
-.chosenFooter a {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
-}
-.chosenFooter .servings {
-  display: flex;
-  align-items: center;
-  margin: 0;
-  font-size: 11px;
-  gap: 8px;
-}
-.servings input {
-  width: 54px;
-  padding: 5px 7px;
-  font-size: 12px;
-  min-height: 32px;
-}
-.selectionRail > .primary {
-  width: 100%;
-  margin-top: 20px;
-}
-.selectionRail .railHint {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
-  margin: 10px 0;
-}
 .workspace .textButton {
   border: 0;
   background: transparent;
@@ -453,13 +363,6 @@
   font-size: 12px;
   text-decoration: underline;
   text-underline-offset: 3px;
-}
-.extra {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 8px 0;
 }
 .intake {
   padding: 24px;
@@ -777,13 +680,6 @@
   }
 }
 @media (max-width: 950px) {
-  .recipeWorkspace {
-    grid-template-columns: minmax(0, 1fr) 280px;
-    gap: 24px;
-  }
-  .selectionRail {
-    padding-left: 20px;
-  }
   .sectionTitle {
     align-items: flex-start;
   }
@@ -834,23 +730,6 @@
   .assistant form button {
     min-width: 50px;
   }
-  .recipeWorkspace {
-    display: flex;
-    flex-direction: column-reverse;
-    gap: 30px;
-  }
-  .selectionRail {
-    position: static;
-    width: 100%;
-    border: 0;
-    border-bottom: 1px solid #d5ddd0;
-    padding: 0 0 20px;
-  }
-  .chosenRecipes {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    column-gap: 24px;
-  }
   .library {
     width: 100%;
   }
@@ -900,9 +779,6 @@
   .workspace select {
     font-size: 16px;
   }
-  .servings input {
-    font-size: 14px;
-  }
   .draftRow {
     grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
     gap: 5px;
@@ -923,18 +799,6 @@
   .manageContent {
     right: auto;
     left: 0;
-  }
-  .chosenRecipes {
-    grid-template-columns: 1fr;
-  }
-  .chosenRecipe {
-    padding: 13px 0;
-  }
-  .chosenFooter {
-    padding-top: 8px;
-  }
-  .selectionRail > .primary {
-    margin-top: 16px;
   }
   .library > .sectionTitle {
     flex-wrap: wrap;
@@ -963,33 +827,7 @@
   }
 }
 
-.workspace .mobileSelectionToggle {
-  display: none;
-}
 @media (max-width: 720px) {
-  .workspace .mobileSelectionToggle {
-    display: inline-flex;
-    border: 0;
-    padding: 4px 0 4px 10px;
-    min-height: 44px;
-    background: transparent;
-    font-size: 12px;
-  }
-  .mobileSelectionToggle[aria-expanded="true"] svg {
-    transform: rotate(90deg);
-  }
-  .desktopCount {
-    display: none;
-  }
-  .selectionDetails:not(.selectionExpanded) {
-    display: none;
-  }
-  .selectionRail > .primary {
-    margin-top: 10px;
-  }
-  .selectionRail .railHint {
-    margin-bottom: 4px;
-  }
   .workspace .haveButton {
     width: 40px;
     height: 40px;
@@ -998,11 +836,128 @@
   .ingredientDetails {
     margin-left: 50px;
   }
-  .chosenHeading > button {
-    min-width: 36px;
-    min-height: 36px;
+}
+
+.planActions {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin: 26px 0;
+}
+.planActions > p {
+  color: var(--muted);
+}
+.planActions > div {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.weekPlan {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(270px, 1fr);
+  gap: 40px;
+  align-items: start;
+}
+.staplesColumn {
+  padding-left: 28px;
+  border-left: 1px solid #dce2d7;
+}
+.staplesColumn > section {
+  padding-top: 0;
+  border-top: 0;
+}
+.planContinue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 28px 0 8px;
+  padding: 22px 0;
+  border-top: 1px solid #cbd5c9;
+}
+.planContinue strong {
+  font-size: 15px;
+  font-weight: 600;
+}
+.planContinue p {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+.library {
+  margin-top: 28px;
+  padding-top: 26px;
+  border-top: 1px solid #cbd5c9;
+  scroll-margin-top: 20px;
+}
+.intake {
+  margin-top: 28px;
+}
+.assistant {
+  margin: 0;
+}
+.assistant > summary {
+  width: fit-content;
+  font-size: 13px;
+  color: var(--muted);
+  padding: 8px 0;
+}
+.assistant[open] {
+  padding-bottom: 20px;
+}
+.assistant form {
+  margin-top: 12px;
+}
+.workspace button {
+  min-height: 44px;
+}
+.workspace input {
+  caret-color: var(--green);
+}
+.workspace input::placeholder,
+.workspace textarea::placeholder {
+  color: #617065;
+  opacity: 1;
+}
+.workspace ::selection {
+  background: #dbe6d7;
+  color: var(--ink);
+}
+@media (max-width: 1100px) {
+  .weekPlan {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
   }
-  .servings input {
-    min-height: 40px;
+  .staplesColumn {
+    padding-left: 0;
+    border-left: 0;
   }
+  .staplesColumn > section {
+    border-top: 1px solid #d5ddd4;
+    padding-top: 24px;
+  }
+}
+@media (max-width: 720px) {
+  .planActions {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    margin: 18px 0 24px;
+  }
+  .planContinue {
+    margin-top: 12px;
+  }
+  .planContinue > button {
+    width: 100%;
+  }
+  .workspace .views button {
+    font-size: 13px;
+  }
+}
+
+.savedName {
+  margin: 0 0 16px;
+  color: var(--muted);
 }

@@ -10,7 +10,7 @@ import {
   Settings,
 } from "lucide-react";
 const items = [
-  { href: "/shop-recipes", label: "Shop these recipes", icon: ShoppingBasket },
+  { href: "/shop-recipes", label: "Weekly shop", icon: ShoppingBasket },
   { href: "/our-week", label: "Our week", icon: Calendar },
   { href: "/recipes", label: "Recipe library", icon: BookOpen },
   { href: "/discover", label: "Discover", icon: Compass },
